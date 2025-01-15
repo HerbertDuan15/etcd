@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	testpb "google.golang.org/grpc/interop/grpc_testing"
@@ -33,7 +34,6 @@ import (
 )
 
 func testEtcdGRPCResolver(t *testing.T, lbPolicy string) {
-
 	// Setup two new dummy stub servers
 	payloadBody := []byte{'1'}
 	s1 := grpctesting.NewDummyStubServer(payloadBody)
@@ -127,13 +127,12 @@ func testEtcdGRPCResolver(t *testing.T, lbPolicy string) {
 
 		// Allow 25% tolerance as round robin is not perfect and we don't want the test to flake
 		expected := float64(totalRequests) * 0.5
-		assert.InEpsilon(t, expected, float64(responses), 0.25, "unexpected total responses from foo: %s", lastResponse)
+		assert.InEpsilonf(t, expected, float64(responses), 0.25, "unexpected total responses from foo: %s", lastResponse)
 	}
 }
 
 // TestEtcdGrpcResolverPickFirst mimics scenarios described in grpc_naming.md doc.
 func TestEtcdGrpcResolverPickFirst(t *testing.T) {
-
 	integration2.BeforeTest(t)
 
 	// Pick first is the default load balancer policy for grpc-go
@@ -142,7 +141,6 @@ func TestEtcdGrpcResolverPickFirst(t *testing.T) {
 
 // TestEtcdGrpcResolverRoundRobin mimics scenarios described in grpc_naming.md doc.
 func TestEtcdGrpcResolverRoundRobin(t *testing.T) {
-
 	integration2.BeforeTest(t)
 
 	// Round robin is a common alternative for more production oriented scenarios
@@ -155,13 +153,13 @@ func TestEtcdEndpointManager(t *testing.T) {
 	s1PayloadBody := []byte{'1'}
 	s1 := grpctesting.NewDummyStubServer(s1PayloadBody)
 	err := s1.Start(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer s1.Stop()
 
 	s2PayloadBody := []byte{'2'}
 	s2 := grpctesting.NewDummyStubServer(s2PayloadBody)
 	err = s2.Start(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer s2.Stop()
 
 	clus := integration2.NewCluster(t, &integration2.ClusterConfig{Size: 3})
@@ -169,9 +167,9 @@ func TestEtcdEndpointManager(t *testing.T) {
 
 	// Check if any endpoint with the same prefix "foo" will not break the logic with multiple endpoints
 	em, err := endpoints.NewManager(clus.Client(0), "foo")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	emOther, err := endpoints.NewManager(clus.Client(1), "foo_other")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	e1 := endpoints.Endpoint{Addr: s1.Addr()}
 	e2 := endpoints.Endpoint{Addr: s2.Addr()}
@@ -180,9 +178,9 @@ func TestEtcdEndpointManager(t *testing.T) {
 	emOther.AddEndpoint(context.Background(), "foo_other/e2", e2)
 
 	epts, err := em.List(context.Background())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	eptsOther, err := emOther.List(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, len(epts), 1)
-	assert.Equal(t, len(eptsOther), 1)
+	require.NoError(t, err)
+	assert.Len(t, epts, 1)
+	assert.Len(t, eptsOther, 1)
 }

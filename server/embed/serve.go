@@ -16,12 +16,14 @@ package embed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	defaultLog "log"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	gw "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/soheilhy/cmux"
@@ -65,6 +67,7 @@ type serveCtx struct {
 	userHandlers    map[string]http.Handler
 	serviceRegister func(*grpc.Server)
 	serversC        chan *servers
+	closeOnce       sync.Once
 }
 
 type servers struct {
@@ -97,9 +100,18 @@ func (sctx *serveCtx) serve(
 	errHandler func(error),
 	grpcDialForRestGatewayBackends func(ctx context.Context) (*grpc.ClientConn, error),
 	splitHTTP bool,
-	gopts ...grpc.ServerOption) (err error) {
+	gopts ...grpc.ServerOption,
+) (err error) {
 	logger := defaultLog.New(io.Discard, "etcdhttp", 0)
-	<-s.ReadyNotify()
+
+	// Make sure serversC is closed even if we prematurely exit the function.
+	defer sctx.close()
+
+	select {
+	case <-s.StoppingNotify():
+		return errors.New("server is stopping")
+	case <-s.ReadyNotify():
+	}
 
 	sctx.lg.Info("ready to serve client requests")
 
@@ -114,8 +126,6 @@ func (sctx *serveCtx) serve(
 	servElection := v3election.NewElectionServer(v3c)
 	servLock := v3lock.NewLockServer(v3c)
 
-	// Make sure serversC is closed even if we prematurely exit the function.
-	defer close(sctx.serversC)
 	var gwmux *gw.ServeMux
 	if s.Cfg.EnableGRPCGateway {
 		// GRPC gateway connects to grpc server via connection provided by grpc dial.
@@ -436,7 +446,7 @@ func (ac *accessController) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 		addCORSHeader(rw, origin)
 	}
 
-	if req.Method == "OPTIONS" {
+	if req.Method == http.MethodOptions {
 		rw.WriteHeader(http.StatusOK)
 		return
 	}
@@ -486,7 +496,7 @@ func (ch *corsHandler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		addCORSHeader(rw, origin)
 	}
 
-	if req.Method == "OPTIONS" {
+	if req.Method == http.MethodOptions {
 		rw.WriteHeader(http.StatusOK)
 		return
 	}
@@ -513,4 +523,10 @@ func (sctx *serveCtx) registerTrace() {
 	sctx.registerUserHandler("/debug/requests", http.HandlerFunc(reqf))
 	evf := func(w http.ResponseWriter, r *http.Request) { trace.RenderEvents(w, r, true) }
 	sctx.registerUserHandler("/debug/events", http.HandlerFunc(evf))
+}
+
+func (sctx *serveCtx) close() {
+	sctx.closeOnce.Do(func() {
+		close(sctx.serversC)
+	})
 }

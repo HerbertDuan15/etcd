@@ -34,6 +34,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Add [`--max-txn-ops`](https://github.com/etcd-io/etcd/pull/14340) flag to make-mirror command.
 - Add [`--consistency`](https://github.com/etcd-io/etcd/pull/15261) flag to member list command.
 - Display [field `hash_revision`](https://github.com/etcd-io/etcd/pull/14812) for `etcdctl endpoint hash` command.
+- Add [`--max-request-bytes` and `--max-recv-bytes`](https://github.com/etcd-io/etcd/pull/18718) global flags.
 
 ### etcdutl v3
 
@@ -84,6 +85,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 
 - Add [`etcd grpc-proxy start --endpoints-auto-sync-interval`](https://github.com/etcd-io/etcd/pull/14354) flag to enable and configure interval of auto sync of endpoints with server.
 - Add [`etcd grpc-proxy start --listen-cipher-suites`](https://github.com/etcd-io/etcd/pull/14308) flag to support adding configurable cipher list.
+- Add [`tls min/max version to grpc proxy`](https://github.com/etcd-io/etcd/pull/18816) to support setting TLS min and max version.
 
 ### tools/benchmark
 
@@ -98,8 +100,8 @@ See [List of metrics](https://etcd.io/docs/latest/metrics/) for all metrics per 
 - Add [`etcd_server_range_duration_seconds`](https://github.com/etcd-io/etcd/pull/17983).
 
 ### Go
-- Require [Go 1.22+](https://github.com/etcd-io/etcd/pull/16594).
-- Compile with [Go 1.22+](https://go.dev/doc/devel/release#go1.21.minor). Please refer to [gc-guide](https://go.dev/doc/gc-guide) to configure `GOGC` and `GOMEMLIMIT` properly. 
+- Require [Go 1.23+](https://github.com/etcd-io/etcd/pull/16594).
+- Compile with [Go 1.23+](https://go.dev/doc/devel/release#go1.21.minor). Please refer to [gc-guide](https://go.dev/doc/gc-guide) to configure `GOGC` and `GOMEMLIMIT` properly. 
 
 ### Other
 

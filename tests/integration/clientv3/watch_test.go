@@ -16,6 +16,7 @@ package clientv3test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 
 	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
@@ -436,9 +438,8 @@ func TestWatchResumeCompacted(t *testing.T) {
 	numPuts := 5
 	kv := clus.Client(1)
 	for i := 0; i < numPuts; i++ {
-		if _, err := kv.Put(context.TODO(), "foo", "bar"); err != nil {
-			t.Fatal(err)
-		}
+		_, err := kv.Put(context.TODO(), "foo", "bar")
+		require.NoError(t, err)
 	}
 	if _, err := kv.Compact(context.TODO(), 3); err != nil {
 		t.Fatal(err)
@@ -471,7 +472,7 @@ func TestWatchResumeCompacted(t *testing.T) {
 		if wresp.Err() == nil {
 			continue
 		}
-		if wresp.Err() != rpctypes.ErrCompacted {
+		if !errors.Is(wresp.Err(), rpctypes.ErrCompacted) {
 			t.Fatalf("wresp.Err() expected %v, got %+v", rpctypes.ErrCompacted, wresp.Err())
 		}
 		break
@@ -502,9 +503,8 @@ func TestWatchCompactRevision(t *testing.T) {
 	// set some keys
 	kv := clus.RandClient()
 	for i := 0; i < 5; i++ {
-		if _, err := kv.Put(context.TODO(), "foo", "bar"); err != nil {
-			t.Fatal(err)
-		}
+		_, err := kv.Put(context.TODO(), "foo", "bar")
+		require.NoError(t, err)
 	}
 
 	w := clus.RandClient()
@@ -519,7 +519,7 @@ func TestWatchCompactRevision(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected wresp, but got closed channel")
 	}
-	if wresp.Err() != rpctypes.ErrCompacted {
+	if !errors.Is(wresp.Err(), rpctypes.ErrCompacted) {
 		t.Fatalf("wresp.Err() expected %v, but got %v", rpctypes.ErrCompacted, wresp.Err())
 	}
 	if !wresp.Canceled {
@@ -576,8 +576,10 @@ func testWatchWithProgressNotify(t *testing.T, watchOnPut bool) {
 			t.Fatalf("resp.Header.Revision expected 2, got %d", resp.Header.Revision)
 		}
 		if watchOnPut { // wait for put if watch on the put key
-			ev := []*clientv3.Event{{Type: clientv3.EventTypePut,
-				Kv: &mvccpb.KeyValue{Key: []byte("foox"), Value: []byte("bar"), CreateRevision: 2, ModRevision: 2, Version: 1}}}
+			ev := []*clientv3.Event{{
+				Type: clientv3.EventTypePut,
+				Kv:   &mvccpb.KeyValue{Key: []byte("foox"), Value: []byte("bar"), CreateRevision: 2, ModRevision: 2, Version: 1},
+			}}
 			if !reflect.DeepEqual(ev, resp.Events) {
 				t.Fatalf("expected %+v, got %+v", ev, resp.Events)
 			}
@@ -809,7 +811,7 @@ func TestWatchAfterClose(t *testing.T) {
 	donec := make(chan struct{})
 	go func() {
 		cli.Watch(context.TODO(), "foo")
-		if err := cli.Close(); err != nil && err != context.Canceled {
+		if err := cli.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("expected %v, got %v", context.Canceled, err)
 		}
 		close(donec)
@@ -858,7 +860,7 @@ func TestWatchWithRequireLeader(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected %v watch channel, got closed channel", rpctypes.ErrNoLeader)
 		}
-		if resp.Err() != rpctypes.ErrNoLeader {
+		if !errors.Is(resp.Err(), rpctypes.ErrNoLeader) {
 			t.Fatalf("expected %v watch response error, got %+v", rpctypes.ErrNoLeader, resp)
 		}
 	case <-time.After(integration2.RequestWaitTimeout):

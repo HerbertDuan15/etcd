@@ -58,7 +58,7 @@ Member:
   --wal-dir ''
     Path to the dedicated wal directory.
   --snapshot-count '10000'
-    Number of committed transactions to trigger a snapshot to disk.
+    Number of committed transactions to trigger a snapshot to disk. Deprecated in v3.6 and will be decommissioned in v3.7.
   --heartbeat-interval '100'
     Time (in milliseconds) of a heartbeat interval.
   --election-timeout '1000'
@@ -72,7 +72,7 @@ Member:
   --listen-client-http-urls ''
     List of URLs to listen on for http only client traffic. Enabling this flag removes http services from --listen-client-urls.
   --max-snapshots '` + strconv.Itoa(embed.DefaultMaxSnapshots) + `'
-    Maximum number of snapshot files to retain (0 is unlimited).
+    Maximum number of snapshot files to retain (0 is unlimited). Deprecated in v3.6 and will be decommissioned in v3.7.
   --max-wals '` + strconv.Itoa(embed.DefaultMaxWALs) + `'
     Maximum number of wal files to retain (0 is unlimited).
   --quota-backend-bytes '0'
@@ -169,12 +169,12 @@ Clustering:
   --auto-compaction-mode 'periodic'
     Interpret 'auto-compaction-retention' one of: periodic|revision. 'periodic' for duration based retention, defaulting to hours if no time unit is provided (e.g. '5m'). 'revision' for revision number based retention.
   --v2-deprecation '` + string(cconfig.V2DeprDefault) + `'
-    Phase of v2store deprecation. Allows to opt-in for higher compatibility mode.
+    Phase of v2store deprecation. Deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.
     Supported values:
       'not-yet'                // Issues a warning if v2store have meaningful content (default in v3.5)
-      'write-only'             // Custom v2 state is not allowed (planned default in v3.6)
-      'write-only-drop-data'   // Custom v2 state will get DELETED !
-      'gone'                   // v2store is not maintained any longer. (planned default in v3.7)
+      'write-only'             // Custom v2 state is not allowed (default in v3.6)
+      'write-only-drop-data'   // Custom v2 state will get DELETED ! (planned default in v3.7)
+      'gone'                   // v2store is not maintained any longer. (planned to cleanup anything related to v2store in v3.8)
 
 Security:
   --cert-file ''
@@ -273,13 +273,17 @@ Experimental distributed tracing:
     Number of samples to collect per million spans for distributed tracing. Disabled by default.
 
 Experimental feature:
-  --experimental-initial-corrupt-check 'false'
+  --experimental-initial-corrupt-check 'false'. It's deprecated, and will be decommissioned in v3.7. Use '--feature-gates=InitialCorruptCheck=true' instead.
     Enable to check data corruption before serving any client/peer traffic.
   --experimental-corrupt-check-time '0s'
+    Duration of time between cluster corruption check passes. Deprecated in v3.6 and will be decommissioned in v3.7. Use 'corrupt-check-time' instead.
+  --corrupt-check-time '0s'
     Duration of time between cluster corruption check passes.
-  --experimental-compact-hash-check-enabled 'false'
+  --experimental-compact-hash-check-enabled 'false'. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=CompactHashCheck=true' instead.
     Enable leader to periodically check followers compaction hashes.
   --experimental-compact-hash-check-time '1m'
+    Duration of time between leader checks followers compaction hashes. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--compact-hash-check-time' instead.
+  --compact-hash-check-time '1m'
     Duration of time between leader checks followers compaction hashes.
   --experimental-enable-lease-checkpoint 'false'
     ExperimentalEnableLeaseCheckpoint enables primary lessor to persist lease remainingTTL to prevent indefinite auto-renewal of long lived leases.
@@ -291,7 +295,7 @@ Experimental feature:
     Duration of periodical watch progress notification.
   --experimental-warning-apply-duration '100ms'
     Warning is generated if requests take more than this duration.
-  --experimental-txn-mode-write-with-shared-buffer 'true'
+  --experimental-txn-mode-write-with-shared-buffer 'true'. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=TxnModeWriteWithSharedBuffer=true' instead.
     Enable the write transaction to use a shared buffer in its readonly check operations.
   --experimental-bootstrap-defrag-threshold-megabytes
     Enable the defrag during etcd server bootstrap on condition that it will free at least the provided threshold of disk space. Needs to be set to non-zero value to take effect.

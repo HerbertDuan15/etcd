@@ -15,6 +15,7 @@
 package etcdmain
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -22,7 +23,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/yaml"
 
 	"go.etcd.io/etcd/pkg/v3/featuregate"
@@ -224,7 +227,7 @@ func TestConfigParsingConflictClusteringFlags(t *testing.T) {
 
 	for i, tt := range conflictArgs {
 		cfg := newConfig()
-		if err := cfg.parse(tt); err != embed.ErrConflictBootstrapFlags {
+		if err := cfg.parse(tt); !errors.Is(err, embed.ErrConflictBootstrapFlags) {
 			t.Errorf("%d: err = %v, want %v", i, err, embed.ErrConflictBootstrapFlags)
 		}
 	}
@@ -267,7 +270,7 @@ func TestConfigFileConflictClusteringFlags(t *testing.T) {
 		args := []string{fmt.Sprintf("--config-file=%s", tmpfile.Name())}
 
 		cfg := newConfig()
-		if err := cfg.parse(args); err != embed.ErrConflictBootstrapFlags {
+		if err := cfg.parse(args); !errors.Is(err, embed.ErrConflictBootstrapFlags) {
 			t.Errorf("%d: err = %v, want %v", i, err, embed.ErrConflictBootstrapFlags)
 		}
 	}
@@ -310,7 +313,7 @@ func TestConfigParsingMissedAdvertiseClientURLsFlag(t *testing.T) {
 
 	for i, tt := range tests {
 		cfg := newConfig()
-		if err := cfg.parse(tt.args); err != tt.werr {
+		if err := cfg.parse(tt.args); !errors.Is(err, tt.werr) {
 			t.Errorf("%d: err = %v, want %v", i, err, tt.werr)
 		}
 	}
@@ -474,6 +477,188 @@ func TestParseFeatureGateFlags(t *testing.T) {
 	}
 }
 
+// TestCompactHashCheckTimeFlagMigration tests the migration from
+// --experimental-compact-hash-check-time to --compact-hash-check-time
+// TODO: delete in v3.7
+func TestCompactHashCheckTimeFlagMigration(t *testing.T) {
+	testCases := []struct {
+		name                             string
+		compactHashCheckTime             string
+		experimentalCompactHashCheckTime string
+		useConfigFile                    bool
+		expectErr                        bool
+		expectedCompactHashCheckTime     time.Duration
+	}{
+		{
+			name:                         "default",
+			expectedCompactHashCheckTime: time.Minute,
+		},
+		{
+			name:                             "cannot set both experimental flag and non experimental flag",
+			compactHashCheckTime:             "2m",
+			experimentalCompactHashCheckTime: "3m",
+			expectErr:                        true,
+		},
+		{
+			name:                             "can set experimental flag",
+			experimentalCompactHashCheckTime: "3m",
+			expectedCompactHashCheckTime:     3 * time.Minute,
+		},
+		{
+			name:                         "can set non experimental flag",
+			compactHashCheckTime:         "2m",
+			expectedCompactHashCheckTime: 2 * time.Minute,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmdLineArgs := []string{}
+			yc := struct {
+				ExperimentalCompactHashCheckTime time.Duration `json:"experimental-compact-hash-check-time,omitempty"`
+				CompactHashCheckTime             time.Duration `json:"compact-hash-check-time,omitempty"`
+			}{}
+
+			if tc.compactHashCheckTime != "" {
+				cmdLineArgs = append(cmdLineArgs, fmt.Sprintf("--compact-hash-check-time=%s", tc.compactHashCheckTime))
+				compactHashCheckTime, err := time.ParseDuration(tc.compactHashCheckTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.CompactHashCheckTime = compactHashCheckTime
+			}
+
+			if tc.experimentalCompactHashCheckTime != "" {
+				cmdLineArgs = append(cmdLineArgs, fmt.Sprintf("--experimental-compact-hash-check-time=%s", tc.experimentalCompactHashCheckTime))
+				experimentalCompactHashCheckTime, err := time.ParseDuration(tc.experimentalCompactHashCheckTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.ExperimentalCompactHashCheckTime = experimentalCompactHashCheckTime
+			}
+
+			b, err := yaml.Marshal(&yc)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tmpfile := mustCreateCfgFile(t, b)
+			defer os.Remove(tmpfile.Name())
+
+			cfgFromCmdLine := newConfig()
+			errFromCmdLine := cfgFromCmdLine.parse(cmdLineArgs)
+
+			cfgFromFile := newConfig()
+			errFromFile := cfgFromFile.parse([]string{fmt.Sprintf("--config-file=%s", tmpfile.Name())})
+
+			if tc.expectErr {
+				if errFromCmdLine == nil || errFromFile == nil {
+					t.Fatal("expect parse error")
+				}
+				return
+			}
+			if errFromCmdLine != nil || errFromFile != nil {
+				t.Fatal(err)
+			}
+
+			if cfgFromCmdLine.ec.CompactHashCheckTime != tc.expectedCompactHashCheckTime {
+				t.Errorf("expected CompactHashCheckTime=%v, got %v", tc.expectedCompactHashCheckTime, cfgFromCmdLine.ec.CompactHashCheckTime)
+			}
+			if cfgFromFile.ec.CompactHashCheckTime != tc.expectedCompactHashCheckTime {
+				t.Errorf("expected CompactHashCheckTime=%v, got %v", tc.expectedCompactHashCheckTime, cfgFromFile.ec.CompactHashCheckTime)
+			}
+		})
+	}
+}
+
+// TestCorruptCheckTimeFlagMigration tests the migration from
+// --experimental-corrupt-check-time to --corrupt-check-time
+// TODO: delete in v3.7
+func TestCorruptCheckTimeFlagMigration(t *testing.T) {
+	testCases := []struct {
+		name                         string
+		corruptCheckTime             string
+		experimentalCorruptCheckTime string
+		useConfigFile                bool
+		expectErr                    bool
+		expectedCorruptCheckTime     time.Duration
+	}{
+		{
+			name:                         "cannot set both experimental flag and non experimental flag",
+			corruptCheckTime:             "2m",
+			experimentalCorruptCheckTime: "3m",
+			expectErr:                    true,
+		},
+		{
+			name:                         "can set experimental flag",
+			experimentalCorruptCheckTime: "3m",
+			expectedCorruptCheckTime:     3 * time.Minute,
+		},
+		{
+			name:                     "can set non experimental flag",
+			corruptCheckTime:         "2m",
+			expectedCorruptCheckTime: 2 * time.Minute,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmdLineArgs := []string{}
+			yc := struct {
+				ExperimentalCorruptCheckTime time.Duration `json:"experimental-corrupt-check-time,omitempty"`
+				CorruptCheckTime             time.Duration `json:"corrupt-check-time,omitempty"`
+			}{}
+
+			if tc.corruptCheckTime != "" {
+				cmdLineArgs = append(cmdLineArgs, fmt.Sprintf("--corrupt-check-time=%s", tc.corruptCheckTime))
+				corruptCheckTime, err := time.ParseDuration(tc.corruptCheckTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.CorruptCheckTime = corruptCheckTime
+			}
+
+			if tc.experimentalCorruptCheckTime != "" {
+				cmdLineArgs = append(cmdLineArgs, fmt.Sprintf("--experimental-corrupt-check-time=%s", tc.experimentalCorruptCheckTime))
+				experimentalCorruptCheckTime, err := time.ParseDuration(tc.experimentalCorruptCheckTime)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.ExperimentalCorruptCheckTime = experimentalCorruptCheckTime
+			}
+
+			b, err := yaml.Marshal(&yc)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tmpfile := mustCreateCfgFile(t, b)
+			defer os.Remove(tmpfile.Name())
+
+			cfgFromCmdLine := newConfig()
+			errFromCmdLine := cfgFromCmdLine.parse(cmdLineArgs)
+
+			cfgFromFile := newConfig()
+			errFromFile := cfgFromFile.parse([]string{fmt.Sprintf("--config-file=%s", tmpfile.Name())})
+
+			if tc.expectErr {
+				if errFromCmdLine == nil || errFromFile == nil {
+					t.Fatal("expect parse error")
+				}
+				return
+			}
+			if errFromCmdLine != nil || errFromFile != nil {
+				t.Fatal(err)
+			}
+
+			if cfgFromCmdLine.ec.CorruptCheckTime != tc.expectedCorruptCheckTime {
+				t.Errorf("expected CorruptCheckTime=%v, got %v", tc.expectedCorruptCheckTime, cfgFromCmdLine.ec.CorruptCheckTime)
+			}
+			if cfgFromFile.ec.CorruptCheckTime != tc.expectedCorruptCheckTime {
+				t.Errorf("expected CorruptCheckTime=%v, got %v", tc.expectedCorruptCheckTime, cfgFromFile.ec.CorruptCheckTime)
+			}
+		})
+	}
+}
+
 func mustCreateCfgFile(t *testing.T, b []byte) *os.File {
 	tmpfile, err := os.CreateTemp("", "servercfg")
 	if err != nil {
@@ -556,5 +741,96 @@ func validateClusteringFlags(t *testing.T, cfg *config) {
 	}
 	if !reflect.DeepEqual(cfg.ec.AdvertiseClientUrls, wcfg.ec.AdvertiseClientUrls) {
 		t.Errorf("advertise-client-urls = %v, want %v", cfg.ec.AdvertiseClientUrls, wcfg.ec.AdvertiseClientUrls)
+	}
+}
+
+func TestConfigFileDeprecatedOptions(t *testing.T) {
+	// Define a minimal config struct with only the fields we need
+	type configFileYAML struct {
+		SnapshotCount                           uint64        `json:"snapshot-count,omitempty"`
+		MaxSnapFiles                            uint          `json:"max-snapshots,omitempty"`
+		ExperimentalCompactHashCheckEnabled     bool          `json:"experimental-compact-hash-check-enabled,omitempty"`
+		ExperimentalCompactHashCheckTime        time.Duration `json:"experimental-compact-hash-check-time,omitempty"`
+		ExperimentalWarningUnaryRequestDuration time.Duration `json:"experimental-warning-unary-request-duration,omitempty"`
+		ExperimentalCorruptCheckTime            time.Duration `json:"experimental-corrupt-check-time,omitempty"`
+	}
+
+	testCases := []struct {
+		name           string
+		configFileYAML configFileYAML
+		expectedFlags  map[string]struct{}
+	}{
+		{
+			name:           "no deprecated options",
+			configFileYAML: configFileYAML{},
+			expectedFlags:  map[string]struct{}{},
+		},
+		{
+			name: "deprecated experimental options",
+			configFileYAML: configFileYAML{
+				ExperimentalCompactHashCheckEnabled:     true,
+				ExperimentalCompactHashCheckTime:        2 * time.Minute,
+				ExperimentalWarningUnaryRequestDuration: time.Second,
+				ExperimentalCorruptCheckTime:            time.Minute,
+			},
+			expectedFlags: map[string]struct{}{
+				"experimental-compact-hash-check-enabled": {},
+				"experimental-compact-hash-check-time":    {},
+				"experimental-corrupt-check-time":         {},
+			},
+		},
+		{
+			name: "deprecated snapshot options",
+			configFileYAML: configFileYAML{
+				SnapshotCount: 10000,
+				MaxSnapFiles:  5,
+			},
+			expectedFlags: map[string]struct{}{
+				"snapshot-count": {},
+				"max-snapshots":  {},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create config file
+			b, err := yaml.Marshal(&tc.configFileYAML)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tmpfile := mustCreateCfgFile(t, b)
+			defer os.Remove(tmpfile.Name())
+
+			// Parse config
+			cfg := newConfig()
+			err = cfg.parse([]string{fmt.Sprintf("--config-file=%s", tmpfile.Name())})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Check which flags were set and marked as deprecated
+			foundFlags := make(map[string]struct{})
+			for flagName := range cfg.ec.FlagsExplicitlySet {
+				if _, ok := deprecatedFlags[flagName]; ok {
+					foundFlags[flagName] = struct{}{}
+				}
+			}
+
+			// Compare sets of flags
+			assert.Equalf(t, tc.expectedFlags, foundFlags, "deprecated flags mismatch - expected: %v, got: %v",
+				tc.expectedFlags, foundFlags)
+
+			// Note: experimental-warning-unary-request-duration deprecation is handled
+			// through a separate mechanism in embed.Config
+			if tc.configFileYAML.ExperimentalWarningUnaryRequestDuration != 0 {
+				assert.Equalf(t, cfg.ec.WarningUnaryRequestDuration,
+					tc.configFileYAML.ExperimentalWarningUnaryRequestDuration,
+					"experimental warning duration mismatch - expected: %v, got: %v",
+					tc.configFileYAML.ExperimentalWarningUnaryRequestDuration,
+					cfg.ec.WarningUnaryRequestDuration)
+			}
+		})
 	}
 }

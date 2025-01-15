@@ -187,10 +187,7 @@ func visitMessage(m protoreflect.Message, visitor Visitor) error {
 		case protoreflect.EnumNumber:
 			err = visitEnumNumber(fd.Enum(), m, visitor)
 		}
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	})
 	return err
 }
@@ -243,7 +240,7 @@ func visitDescriptor(md protoreflect.Descriptor, visitor Visitor) error {
 	}
 	ver, err := etcdVersionFromOptionsString(opts.String())
 	if err != nil {
-		return fmt.Errorf("%s: %s", md.FullName(), err)
+		return fmt.Errorf("%s: %w", md.FullName(), err)
 	}
 	return visitor(md.FullName(), ver)
 }

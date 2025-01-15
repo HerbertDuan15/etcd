@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"go.etcd.io/etcd/tests/v3/robustness/model"
@@ -52,10 +53,8 @@ func persistClientReports(t *testing.T, lg *zap.Logger, path string, reports []C
 	})
 	for _, r := range reports {
 		clientDir := filepath.Join(path, fmt.Sprintf("client-%d", r.ClientID))
-		err := os.MkdirAll(clientDir, 0700)
-		if err != nil {
-			t.Fatal(err)
-		}
+		err := os.MkdirAll(clientDir, 0o700)
+		require.NoError(t, err)
 		if len(r.Watch) != 0 {
 			persistWatchOperations(t, lg, filepath.Join(clientDir, "watch.json"), r.Watch)
 		} else {
@@ -116,7 +115,7 @@ func loadWatchOperations(path string) (operations []model.WatchOperation, err er
 		}
 		return nil, fmt.Errorf("failed to open watch operation file: %q, err: %w", path, err)
 	}
-	file, err := os.OpenFile(path, os.O_RDONLY, 0755)
+	file, err := os.OpenFile(path, os.O_RDONLY, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open watch operation file: %q, err: %w", path, err)
 	}
@@ -141,7 +140,7 @@ func loadKeyValueOperations(path string) (operations []porcupine.Operation, err 
 		}
 		return nil, fmt.Errorf("failed to open watch operation file: %q, err: %w", path, err)
 	}
-	file, err := os.OpenFile(path, os.O_RDONLY, 0755)
+	file, err := os.OpenFile(path, os.O_RDONLY, 0o755)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open watch operation file: %q, err: %w", path, err)
 	}
@@ -172,7 +171,7 @@ func loadKeyValueOperations(path string) (operations []porcupine.Operation, err 
 
 func persistWatchOperations(t *testing.T, lg *zap.Logger, path string, responses []model.WatchOperation) {
 	lg.Info("Saving watch operations", zap.String("path", path))
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o755)
 	if err != nil {
 		t.Errorf("Failed to save watch operations: %v", err)
 		return
@@ -189,7 +188,7 @@ func persistWatchOperations(t *testing.T, lg *zap.Logger, path string, responses
 
 func persistKeyValueOperations(t *testing.T, lg *zap.Logger, path string, operations []porcupine.Operation) {
 	lg.Info("Saving operation history", zap.String("path", path))
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o755)
 	if err != nil {
 		t.Errorf("Failed to save operation history: %v", err)
 		return

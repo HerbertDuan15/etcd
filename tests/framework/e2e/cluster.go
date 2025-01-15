@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -312,6 +313,10 @@ func WithLogLevel(level string) EPClusterOption {
 }
 
 func WithCorruptCheckTime(time time.Duration) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CorruptCheckTime = time }
+}
+
+func WithExperimentalCorruptCheckTime(time time.Duration) EPClusterOption {
 	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalCorruptCheckTime = time }
 }
 
@@ -328,7 +333,7 @@ func WithCompactHashCheckEnabled(enabled bool) EPClusterOption {
 }
 
 func WithCompactHashCheckTime(time time.Duration) EPClusterOption {
-	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalCompactHashCheckTime = time }
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CompactHashCheckTime = time }
 }
 
 func WithGoFailEnabled(enabled bool) EPClusterOption {
@@ -437,7 +442,7 @@ func InitEtcdProcessCluster(t testing.TB, cfg *EtcdProcessClusterConfig) (*EtcdP
 		proc, err := NewEtcdProcess(t, etcdCfgs[i])
 		if err != nil {
 			epc.Close()
-			return nil, fmt.Errorf("cannot configure: %v", err)
+			return nil, fmt.Errorf("cannot configure: %w", err)
 		}
 		epc.Procs[i] = proc
 	}
@@ -449,11 +454,11 @@ func InitEtcdProcessCluster(t testing.TB, cfg *EtcdProcessClusterConfig) (*EtcdP
 func StartEtcdProcessCluster(ctx context.Context, t testing.TB, epc *EtcdProcessCluster, cfg *EtcdProcessClusterConfig) (*EtcdProcessCluster, error) {
 	if cfg.RollingStart {
 		if err := epc.RollingStart(ctx); err != nil {
-			return nil, fmt.Errorf("cannot rolling-start: %v", err)
+			return nil, fmt.Errorf("cannot rolling-start: %w", err)
 		}
 	} else {
 		if err := epc.Start(ctx); err != nil {
-			return nil, fmt.Errorf("cannot start: %v", err)
+			return nil, fmt.Errorf("cannot start: %w", err)
 		}
 	}
 
@@ -465,7 +470,7 @@ func StartEtcdProcessCluster(ctx context.Context, t testing.TB, epc *EtcdProcess
 	}
 	if cfg.InitialLeaderIndex >= 0 {
 		if err := epc.MoveLeader(ctx, t, cfg.InitialLeaderIndex); err != nil {
-			return nil, fmt.Errorf("failed to move leader: %v", err)
+			return nil, fmt.Errorf("failed to move leader: %w", err)
 		}
 	}
 	return epc, nil
@@ -634,9 +639,7 @@ func (cfg *EtcdProcessClusterConfig) EtcdServerProcessConfig(tb testing.TB, i in
 		args = append(args, fmt.Sprintf("--%s=%s", flag, value))
 	}
 	envVars := map[string]string{}
-	for key, value := range cfg.EnvVars {
-		envVars[key] = value
-	}
+	maps.Copy(envVars, cfg.EnvVars)
 	var gofailPort int
 	if cfg.GoFailEnabled {
 		gofailPort = (i+1)*10000 + 2381
@@ -864,7 +867,7 @@ func (epc *EtcdProcessCluster) StartNewProcFromConfig(ctx context.Context, tb te
 	proc, err := NewEtcdProcess(tb, serverCfg)
 	if err != nil {
 		epc.Close()
-		return fmt.Errorf("cannot configure: %v", err)
+		return fmt.Errorf("cannot configure: %w", err)
 	}
 
 	epc.Procs = append(epc.Procs, proc)
@@ -947,7 +950,7 @@ func (epc *EtcdProcessCluster) Stop() (err error) {
 		}
 		if curErr := p.Stop(); curErr != nil {
 			if err != nil {
-				err = fmt.Errorf("%v; %v", err, curErr)
+				err = fmt.Errorf("%w; %w", err, curErr)
 			} else {
 				err = curErr
 			}
@@ -969,7 +972,7 @@ func (epc *EtcdProcessCluster) ConcurrentStop() (err error) {
 	for range epc.Procs {
 		if curErr := <-errCh; curErr != nil {
 			if err != nil {
-				err = fmt.Errorf("%v; %v", err, curErr)
+				err = fmt.Errorf("%w; %w", err, curErr)
 			} else {
 				err = curErr
 			}

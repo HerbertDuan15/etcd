@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.etcd.io/etcd/tests/v3/framework/e2e"
@@ -32,14 +33,10 @@ func TestServerJsonLogging(t *testing.T) {
 		e2e.WithClusterSize(1),
 		e2e.WithLogLevel("debug"),
 	)
-	if err != nil {
-		t.Fatalf("could not start etcd process cluster (%v)", err)
-	}
+	require.NoErrorf(t, err, "could not start etcd process cluster")
 	logs := epc.Procs[0].Logs()
 	time.Sleep(time.Second)
-	if err = epc.Close(); err != nil {
-		t.Fatalf("error closing etcd processes (%v)", err)
-	}
+	require.NoErrorf(t, epc.Close(), "error closing etcd processes")
 	var entry logEntry
 	lines := logs.Lines()
 	if len(lines) == 0 {
@@ -74,6 +71,7 @@ type logEntry struct {
 	Timestamp string `json:"ts"`
 	Caller    string `json:"caller"`
 	Message   string `json:"msg"`
+	Error     string `json:"error"`
 }
 
 func TestConnectionRejectMessage(t *testing.T) {
@@ -130,7 +128,7 @@ func TestConnectionRejectMessage(t *testing.T) {
 			go func() {
 				startedCh <- struct{}{}
 				verr := e2e.WaitReadyExpectProc(context.TODO(), p, []string{tc.expectedErrMsg})
-				require.NoError(t, verr)
+				assert.NoError(t, verr)
 				doneCh <- struct{}{}
 			}()
 

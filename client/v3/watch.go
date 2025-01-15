@@ -221,8 +221,7 @@ type watchRequest struct {
 }
 
 // progressRequest is issued by the subscriber to request watch progress
-type progressRequest struct {
-}
+type progressRequest struct{}
 
 // watcherStream represents a registered watcher
 type watcherStream struct {
@@ -261,8 +260,10 @@ func NewWatchFromWatchClient(wc pb.WatchClient, c *Client) Watcher {
 }
 
 // never closes
-var valCtxCh = make(chan struct{})
-var zeroTime = time.Unix(0, 0)
+var (
+	valCtxCh = make(chan struct{})
+	zeroTime = time.Unix(0, 0)
+)
 
 // ctx with only the values; never Done
 type valCtx struct{ context.Context }
@@ -395,7 +396,7 @@ func (w *watcher) Close() (err error) {
 		}
 	}
 	// Consider context.Canceled as a successful close
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
 	return err
@@ -653,7 +654,7 @@ func (w *watchGRPCStream) run() {
 
 		// watch client failed on Recv; spawn another if possible
 		case err := <-w.errc:
-			if isHaltErr(w.ctx, err) || ContextError(w.ctx, err) == v3rpc.ErrNoLeader {
+			if isHaltErr(w.ctx, err) || errors.Is(ContextError(w.ctx, err), v3rpc.ErrNoLeader) {
 				closeErr = err
 				return
 			}
@@ -732,7 +733,6 @@ func (w *watchGRPCStream) dispatchEvent(pbresp *pb.WatchResponse) bool {
 	}
 
 	return w.unicastResponse(wr, pbresp.WatchId)
-
 }
 
 // broadcastResponse send a watch response to all watch substreams.

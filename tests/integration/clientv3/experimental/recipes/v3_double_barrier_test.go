@@ -16,6 +16,7 @@ package recipes_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ func TestDoubleBarrierTooManyClients(t *testing.T) {
 	// no any other client can enter the barrier.
 	wgEntered.Wait()
 	t.Log("Try to enter into double barrier")
-	if err = b.Enter(); err != recipe.ErrTooManyClients {
+	if err = b.Enter(); !errors.Is(err, recipe.ErrTooManyClients) {
 		t.Errorf("Unexcepted error, expected: ErrTooManyClients, got: %v", err)
 	}
 
@@ -158,7 +159,7 @@ func TestDoubleBarrierTooManyClients(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 	// Make sure the extra `b.Enter()` did not create a new ephemeral key
-	assert.Equal(t, waiters, len(resp.Kvs))
+	assert.Len(t, resp.Kvs, waiters)
 	close(donec)
 
 	wgDone.Wait()

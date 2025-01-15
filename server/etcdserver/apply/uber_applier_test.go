@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 	"golang.org/x/crypto/bcrypt"
@@ -72,7 +73,7 @@ func defaultUberApplier(t *testing.T) UberApplier {
 		consistentIndex,
 		1*time.Hour,
 		false,
-		16*1024*1024, //16MB
+		16*1024*1024, // 16MB
 	)
 }
 
@@ -130,7 +131,7 @@ func TestUberApplier_Alarm_Corrupt(t *testing.T) {
 		},
 	})
 	require.NotNil(t, result)
-	require.Nil(t, result.Err)
+	require.NoError(t, result.Err)
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,7 +165,8 @@ func TestUberApplier_Alarm_Quota(t *testing.T) {
 							},
 						},
 					},
-				}}},
+				},
+			}},
 			expectError: errors.ErrNoSpace,
 		},
 		{
@@ -178,7 +180,8 @@ func TestUberApplier_Alarm_Quota(t *testing.T) {
 							},
 						},
 					},
-				}}},
+				},
+			}},
 			expectError: nil,
 		},
 		{
@@ -209,7 +212,8 @@ func TestUberApplier_Alarm_Quota(t *testing.T) {
 							},
 						},
 					},
-				}}},
+				},
+			}},
 			expectError: nil,
 		},
 		{
@@ -229,7 +233,7 @@ func TestUberApplier_Alarm_Quota(t *testing.T) {
 		},
 	})
 	require.NotNil(t, result)
-	require.Nil(t, result.Err)
+	require.NoError(t, result.Err)
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,7 +256,7 @@ func TestUberApplier_Alarm_Deactivate(t *testing.T) {
 		},
 	})
 	require.NotNil(t, result)
-	require.Nil(t, result.Err)
+	require.NoError(t, result.Err)
 
 	result = ua.Apply(&pb.InternalRaftRequest{Put: &pb.PutRequest{Key: []byte(key)}})
 	require.NotNil(t, result)
@@ -267,9 +271,9 @@ func TestUberApplier_Alarm_Deactivate(t *testing.T) {
 		},
 	})
 	require.NotNil(t, result)
-	require.Nil(t, result.Err)
+	require.NoError(t, result.Err)
 
 	result = ua.Apply(&pb.InternalRaftRequest{Put: &pb.PutRequest{Key: []byte(key)}})
 	require.NotNil(t, result)
-	require.Nil(t, result.Err)
+	assert.NoError(t, result.Err)
 }

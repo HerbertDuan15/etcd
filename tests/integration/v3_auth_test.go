@@ -21,10 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"go.etcd.io/etcd/api/v3/authpb"
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
-	"go.etcd.io/etcd/client/pkg/v3/testutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/tests/v3/framework/integration"
 )
@@ -320,15 +322,12 @@ func TestV3AuthWithLeaseAttach(t *testing.T) {
 
 func authSetupUsers(t *testing.T, auth pb.AuthClient, users []user) {
 	for _, user := range users {
-		if _, err := auth.UserAdd(context.TODO(), &pb.AuthUserAddRequest{Name: user.name, Password: user.password, Options: &authpb.UserAddOptions{NoPassword: false}}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := auth.RoleAdd(context.TODO(), &pb.AuthRoleAddRequest{Name: user.role}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := auth.UserGrantRole(context.TODO(), &pb.AuthUserGrantRoleRequest{User: user.name, Role: user.role}); err != nil {
-			t.Fatal(err)
-		}
+		_, err := auth.UserAdd(context.TODO(), &pb.AuthUserAddRequest{Name: user.name, Password: user.password, Options: &authpb.UserAddOptions{NoPassword: false}})
+		require.NoError(t, err)
+		_, err = auth.RoleAdd(context.TODO(), &pb.AuthRoleAddRequest{Name: user.role})
+		require.NoError(t, err)
+		_, err = auth.UserGrantRole(context.TODO(), &pb.AuthUserGrantRoleRequest{User: user.name, Role: user.role})
+		require.NoError(t, err)
 
 		if len(user.key) == 0 {
 			continue
@@ -339,9 +338,8 @@ func authSetupUsers(t *testing.T, auth pb.AuthClient, users []user) {
 			Key:      []byte(user.key),
 			RangeEnd: []byte(user.end),
 		}
-		if _, err := auth.RoleGrantPermission(context.TODO(), &pb.AuthRoleGrantPermissionRequest{Name: user.role, Perm: perm}); err != nil {
-			t.Fatal(err)
-		}
+		_, err = auth.RoleGrantPermission(context.TODO(), &pb.AuthRoleGrantPermissionRequest{Name: user.role, Perm: perm})
+		require.NoError(t, err)
 	}
 }
 
@@ -395,7 +393,7 @@ func TestV3AuthOldRevConcurrent(t *testing.T) {
 		Username:    "root",
 		Password:    "123",
 	})
-	testutil.AssertNil(t, cerr)
+	require.NoError(t, cerr)
 	defer c.Close()
 
 	var wg sync.WaitGroup
@@ -403,13 +401,13 @@ func TestV3AuthOldRevConcurrent(t *testing.T) {
 		defer wg.Done()
 		role, user := fmt.Sprintf("test-role-%d", i), fmt.Sprintf("test-user-%d", i)
 		_, err := c.RoleAdd(context.TODO(), role)
-		testutil.AssertNil(t, err)
+		require.NoError(t, err)
 		_, err = c.RoleGrantPermission(context.TODO(), role, "\x00", clientv3.GetPrefixRangeEnd(""), clientv3.PermissionType(clientv3.PermReadWrite))
-		testutil.AssertNil(t, err)
+		require.NoError(t, err)
 		_, err = c.UserAdd(context.TODO(), user, "123")
-		testutil.AssertNil(t, err)
+		require.NoError(t, err)
 		_, err = c.Put(context.TODO(), "a", "b")
-		testutil.AssertNil(t, err)
+		assert.NoError(t, err)
 	}
 	// needs concurrency to trigger
 	numRoles := 2
@@ -454,7 +452,7 @@ func TestV3AuthWatchErrorAndWatchId0(t *testing.T) {
 		watchStartCh <- struct{}{}
 		watchResponse := <-wChan
 		t.Logf("watch response from k1: %v", watchResponse)
-		testutil.AssertTrue(t, len(watchResponse.Events) != 0)
+		assert.NotEmpty(t, watchResponse.Events)
 		watchEndCh <- struct{}{}
 	}()
 
@@ -464,7 +462,7 @@ func TestV3AuthWatchErrorAndWatchId0(t *testing.T) {
 
 	wChan := c.Watch(ctx, "non-allowed-key", clientv3.WithRev(1))
 	watchResponse := <-wChan
-	testutil.AssertNotNil(t, watchResponse.Err()) // permission denied
+	require.Error(t, watchResponse.Err()) // permission denied
 
 	_, err := c.Put(ctx, "k1", "val")
 	if err != nil {

@@ -58,21 +58,21 @@ const (
 	ClusterStateFlagNew      = "new"
 	ClusterStateFlagExisting = "existing"
 
-	DefaultName                             = "default"
-	DefaultMaxSnapshots                     = 5
-	DefaultMaxWALs                          = 5
-	DefaultMaxTxnOps                        = uint(128)
-	DefaultWarningApplyDuration             = 100 * time.Millisecond
-	DefaultWarningUnaryRequestDuration      = 300 * time.Millisecond
-	DefaultMaxRequestBytes                  = 1.5 * 1024 * 1024
-	DefaultMaxConcurrentStreams             = math.MaxUint32
-	DefaultGRPCKeepAliveMinTime             = 5 * time.Second
-	DefaultGRPCKeepAliveInterval            = 2 * time.Hour
-	DefaultGRPCKeepAliveTimeout             = 20 * time.Second
-	DefaultDowngradeCheckTime               = 5 * time.Second
-	DefaultAutoCompactionMode               = "periodic"
-	DefaultAuthToken                        = "simple"
-	DefaultExperimentalCompactHashCheckTime = time.Minute
+	DefaultName                        = "default"
+	DefaultMaxSnapshots                = 5
+	DefaultMaxWALs                     = 5
+	DefaultMaxTxnOps                   = uint(128)
+	DefaultWarningApplyDuration        = 100 * time.Millisecond
+	DefaultWarningUnaryRequestDuration = 300 * time.Millisecond
+	DefaultMaxRequestBytes             = 1.5 * 1024 * 1024
+	DefaultMaxConcurrentStreams        = math.MaxUint32
+	DefaultGRPCKeepAliveMinTime        = 5 * time.Second
+	DefaultGRPCKeepAliveInterval       = 2 * time.Hour
+	DefaultGRPCKeepAliveTimeout        = 20 * time.Second
+	DefaultDowngradeCheckTime          = 5 * time.Second
+	DefaultAutoCompactionMode          = "periodic"
+	DefaultAuthToken                   = "simple"
+	DefaultCompactHashCheckTime        = time.Minute
 
 	DefaultDiscoveryDialTimeout      = 2 * time.Second
 	DefaultDiscoveryRequestTimeOut   = 5 * time.Second
@@ -128,6 +128,14 @@ var (
 
 	// indirection for testing
 	getCluster = srv.GetCluster
+
+	// in 3.6, we are migration all the --experimental flags to feature gate and flags without the prefix.
+	// This is the mapping from the non boolean `experimental-` to the new flags.
+	// TODO: delete in v3.7
+	experimentalNonBoolFlagMigrationMap = map[string]string{
+		"experimental-compact-hash-check-time": "compact-hash-check-time",
+		"experimental-corrupt-check-time":      "corrupt-check-time",
+	}
 )
 
 var (
@@ -158,6 +166,8 @@ type Config struct {
 	//revive:disable-next-line:var-naming
 	WalDir string `json:"wal-dir"`
 
+	// SnapshotCount is deprecated in v3.6 and will be decommissioned in v3.7.
+	// TODO: remove it in 3.7.
 	SnapshotCount uint64 `json:"snapshot-count"`
 
 	// SnapshotCatchUpEntries is the number of entries for a slow follower
@@ -167,6 +177,8 @@ type Config struct {
 	// follower to catch up.
 	SnapshotCatchUpEntries uint64 `json:"experimental-snapshot-catch-up-entries"`
 
+	// MaxSnapFiles is deprecated in v3.6 and will be decommissioned in v3.7.
+	// TODO: remove it in 3.7.
 	MaxSnapFiles uint `json:"max-snapshots"`
 	//revive:disable-next-line:var-naming
 	MaxWalFiles uint `json:"max-wals"`
@@ -352,10 +364,21 @@ type Config struct {
 	// AuthTokenTTL in seconds of the simple token
 	AuthTokenTTL uint `json:"auth-token-ttl"`
 
-	ExperimentalInitialCorruptCheck     bool          `json:"experimental-initial-corrupt-check"`
-	ExperimentalCorruptCheckTime        time.Duration `json:"experimental-corrupt-check-time"`
-	ExperimentalCompactHashCheckEnabled bool          `json:"experimental-compact-hash-check-enabled"`
-	ExperimentalCompactHashCheckTime    time.Duration `json:"experimental-compact-hash-check-time"`
+	ExperimentalInitialCorruptCheck bool `json:"experimental-initial-corrupt-check"`
+	// ExperimentalCorruptCheckTime is the duration of time between cluster corruption check passes.
+	// Deprecated in v3.6 and will be decommissioned in v3.7.
+	// TODO: delete in v3.7
+	ExperimentalCorruptCheckTime time.Duration `json:"experimental-corrupt-check-time"`
+	CorruptCheckTime             time.Duration `json:"corrupt-check-time"`
+	// ExperimentalCompactHashCheckEnabled enables leader to periodically check followers compaction hashes.
+	// Deprecated in v3.6 and will be decommissioned in v3.7.
+	// TODO: delete in v3.7
+	ExperimentalCompactHashCheckEnabled bool `json:"experimental-compact-hash-check-enabled"`
+	// ExperimentalCompactHashCheckTime is the duration of time between leader checks followers compaction hashes.
+	// Deprecated in v3.6 and will be decommissioned in v3.7.
+	// TODO: delete in v3.7
+	ExperimentalCompactHashCheckTime time.Duration `json:"experimental-compact-hash-check-time"`
+	CompactHashCheckTime             time.Duration `json:"compact-hash-check-time"`
 
 	// ExperimentalEnableLeaseCheckpoint enables leader to send regular checkpoints to other members to prevent reset of remaining TTL on leader change.
 	ExperimentalEnableLeaseCheckpoint bool `json:"experimental-enable-lease-checkpoint"`
@@ -457,11 +480,15 @@ type Config struct {
 	// ExperimentalStopGRPCServiceOnDefrag enables etcd gRPC service to stop serving client requests on defragmentation.
 	ExperimentalStopGRPCServiceOnDefrag bool `json:"experimental-stop-grpc-service-on-defrag"`
 
-	// V2Deprecation describes phase of API & Storage V2 support
+	// V2Deprecation describes phase of API & Storage V2 support.
+	// Deprecated and scheduled for removal in v3.8.
+	// Do not set this field for embedded use cases, as it has no effect. However, setting it will not cause any harm.
 	V2Deprecation config.V2DeprecationEnum `json:"v2-deprecation"`
 
 	// ServerFeatureGate is a server level feature gate
 	ServerFeatureGate featuregate.FeatureGate
+	// FlagsExplicitlySet stores if a flag is explicitly set from the cmd line or config file.
+	FlagsExplicitlySet map[string]bool
 }
 
 // configYAML holds the config suitable for yaml parsing
@@ -561,14 +588,14 @@ func NewConfig() *Config {
 		LogRotationConfigJSON: DefaultLogRotationConfig,
 		EnableGRPCGateway:     true,
 
-		ExperimentalDowngradeCheckTime:           DefaultDowngradeCheckTime,
-		ExperimentalMemoryMlock:                  false,
-		ExperimentalTxnModeWriteWithSharedBuffer: true,
-		ExperimentalStopGRPCServiceOnDefrag:      false,
-		ExperimentalMaxLearners:                  membership.DefaultMaxLearners,
+		ExperimentalDowngradeCheckTime:      DefaultDowngradeCheckTime,
+		ExperimentalMemoryMlock:             false,
+		ExperimentalStopGRPCServiceOnDefrag: false,
+		ExperimentalMaxLearners:             membership.DefaultMaxLearners,
 
-		ExperimentalCompactHashCheckEnabled: false,
-		ExperimentalCompactHashCheckTime:    DefaultExperimentalCompactHashCheckTime,
+		CompactHashCheckTime: DefaultCompactHashCheckTime,
+		// TODO: delete in v3.7
+		ExperimentalCompactHashCheckTime: DefaultCompactHashCheckTime,
 
 		V2Deprecation: config.V2DeprDefault,
 
@@ -586,6 +613,7 @@ func NewConfig() *Config {
 
 		AutoCompactionMode: DefaultAutoCompactionMode,
 		ServerFeatureGate:  features.NewDefaultServerFeatureGate(DefaultName, nil),
+		FlagsExplicitlySet: map[string]bool{},
 	}
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 	return cfg
@@ -613,10 +641,10 @@ func (cfg *Config) AddFlags(fs *flag.FlagSet) {
 		"listen-metrics-urls",
 		"List of URLs to listen on for the metrics and health endpoints.",
 	)
-	fs.UintVar(&cfg.MaxSnapFiles, "max-snapshots", cfg.MaxSnapFiles, "Maximum number of snapshot files to retain (0 is unlimited).")
+	fs.UintVar(&cfg.MaxSnapFiles, "max-snapshots", cfg.MaxSnapFiles, "Maximum number of snapshot files to retain (0 is unlimited). Deprecated in v3.6 and will be decommissioned in v3.7.")
 	fs.UintVar(&cfg.MaxWalFiles, "max-wals", cfg.MaxWalFiles, "Maximum number of wal files to retain (0 is unlimited).")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "Human-readable name for this member.")
-	fs.Uint64Var(&cfg.SnapshotCount, "snapshot-count", cfg.SnapshotCount, "Number of committed transactions to trigger a snapshot to disk.")
+	fs.Uint64Var(&cfg.SnapshotCount, "snapshot-count", cfg.SnapshotCount, "Number of committed transactions to trigger a snapshot to disk. Deprecated in v3.6 and will be decommissioned in v3.7.")
 	fs.UintVar(&cfg.TickMs, "heartbeat-interval", cfg.TickMs, "Time (in milliseconds) of a heartbeat interval.")
 	fs.UintVar(&cfg.ElectionMs, "election-timeout", cfg.ElectionMs, "Time (in milliseconds) for an election to timeout.")
 	fs.BoolVar(&cfg.InitialElectionTickAdvance, "initial-election-tick-advance", cfg.InitialElectionTickAdvance, "Whether to fast-forward initial election ticks on boot for faster election.")
@@ -748,9 +776,14 @@ func (cfg *Config) AddFlags(fs *flag.FlagSet) {
 
 	// experimental
 	fs.BoolVar(&cfg.ExperimentalInitialCorruptCheck, "experimental-initial-corrupt-check", cfg.ExperimentalInitialCorruptCheck, "Enable to check data corruption before serving any client/peer traffic.")
-	fs.DurationVar(&cfg.ExperimentalCorruptCheckTime, "experimental-corrupt-check-time", cfg.ExperimentalCorruptCheckTime, "Duration of time between cluster corruption check passes.")
-	fs.BoolVar(&cfg.ExperimentalCompactHashCheckEnabled, "experimental-compact-hash-check-enabled", cfg.ExperimentalCompactHashCheckEnabled, "Enable leader to periodically check followers compaction hashes.")
-	fs.DurationVar(&cfg.ExperimentalCompactHashCheckTime, "experimental-compact-hash-check-time", cfg.ExperimentalCompactHashCheckTime, "Duration of time between leader checks followers compaction hashes.")
+	// TODO: delete in v3.7
+	fs.DurationVar(&cfg.ExperimentalCorruptCheckTime, "experimental-corrupt-check-time", cfg.ExperimentalCorruptCheckTime, "Duration of time between cluster corruption check passes. Deprecated in v3.6 and will be decommissioned in v3.7. Use --corrupt-check-time instead")
+	fs.DurationVar(&cfg.CorruptCheckTime, "corrupt-check-time", cfg.CorruptCheckTime, "Duration of time between cluster corruption check passes.")
+	// TODO: delete in v3.7
+	fs.BoolVar(&cfg.ExperimentalCompactHashCheckEnabled, "experimental-compact-hash-check-enabled", cfg.ExperimentalCompactHashCheckEnabled, "Enable leader to periodically check followers compaction hashes. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=CompactHashCheck=true' instead")
+	fs.DurationVar(&cfg.ExperimentalCompactHashCheckTime, "experimental-compact-hash-check-time", cfg.ExperimentalCompactHashCheckTime, "Duration of time between leader checks followers compaction hashes. Deprecated in v3.6 and will be decommissioned in v3.7. Use --compact-hash-check-time instead.")
+
+	fs.DurationVar(&cfg.CompactHashCheckTime, "compact-hash-check-time", cfg.CompactHashCheckTime, "Duration of time between leader checks followers compaction hashes.")
 
 	fs.BoolVar(&cfg.ExperimentalEnableLeaseCheckpoint, "experimental-enable-lease-checkpoint", false, "Enable leader to send regular checkpoints to other members to prevent reset of remaining TTL on leader change.")
 	// TODO: delete in v3.7
@@ -806,11 +839,16 @@ func (cfg *configYAML) configFromFile(path string) error {
 	}
 
 	// parses the yaml bytes to raw map first, then getBoolFlagVal can get the top level bool flag value.
-	var cfgMap map[string]interface{}
+	var cfgMap map[string]any
 	err = yaml.Unmarshal(b, &cfgMap)
 	if err != nil {
 		return err
 	}
+
+	for flg := range cfgMap {
+		cfg.FlagsExplicitlySet[flg] = true
+	}
+
 	getBoolFlagVal := func(flagName string) *bool {
 		flagVal, ok := cfgMap[flagName]
 		if !ok {
@@ -973,6 +1011,14 @@ func updateMinMaxVersions(info *transport.TLSInfo, min, max string) {
 
 // Validate ensures that '*embed.Config' fields are properly configured.
 func (cfg *Config) Validate() error {
+	// make sure there is no conflict in the flag settings in the ExperimentalNonBoolFlagMigrationMap
+	// TODO: delete in v3.7
+	for oldFlag, newFlag := range experimentalNonBoolFlagMigrationMap {
+		if cfg.FlagsExplicitlySet[oldFlag] && cfg.FlagsExplicitlySet[newFlag] {
+			return fmt.Errorf("cannot set --%s and --%s at the same time, please use --%s only", oldFlag, newFlag, newFlag)
+		}
+	}
+
 	if err := cfg.setupLogging(); err != nil {
 		return err
 	}
@@ -993,11 +1039,11 @@ func (cfg *Config) Validate() error {
 	}
 	if err := checkHostURLs(cfg.AdvertisePeerUrls); err != nil {
 		addrs := cfg.getAdvertisePeerURLs()
-		return fmt.Errorf(`--initial-advertise-peer-urls %q must be "host:port" (%v)`, strings.Join(addrs, ","), err)
+		return fmt.Errorf(`--initial-advertise-peer-urls %q must be "host:port" (%w)`, strings.Join(addrs, ","), err)
 	}
 	if err := checkHostURLs(cfg.AdvertiseClientUrls); err != nil {
 		addrs := cfg.getAdvertiseClientURLs()
-		return fmt.Errorf(`--advertise-client-urls %q must be "host:port" (%v)`, strings.Join(addrs, ","), err)
+		return fmt.Errorf(`--advertise-client-urls %q must be "host:port" (%w)`, strings.Join(addrs, ","), err)
 	}
 	// Check if conflicting flags are passed.
 	nSet := 0
@@ -1066,7 +1112,7 @@ func (cfg *Config) Validate() error {
 	// Validate distributed tracing configuration but only if enabled.
 	if cfg.ExperimentalEnableDistributedTracing {
 		if err := validateTracingConfig(cfg.ExperimentalDistributedTracingSamplingRatePerMillion); err != nil {
-			return fmt.Errorf("distributed tracing configurition is not valid: (%v)", err)
+			return fmt.Errorf("distributed tracing configurition is not valid: (%w)", err)
 		}
 	}
 
@@ -1077,9 +1123,12 @@ func (cfg *Config) Validate() error {
 	if cfg.ExperimentalEnableLeaseCheckpointPersist && !cfg.ExperimentalEnableLeaseCheckpoint {
 		return fmt.Errorf("setting experimental-enable-lease-checkpoint-persist requires experimental-enable-lease-checkpoint")
 	}
-
+	// TODO: delete in v3.7
 	if cfg.ExperimentalCompactHashCheckTime <= 0 {
 		return fmt.Errorf("--experimental-compact-hash-check-time must be >0 (set to %v)", cfg.ExperimentalCompactHashCheckTime)
+	}
+	if cfg.CompactHashCheckTime <= 0 {
+		return fmt.Errorf("--compact-hash-check-time must be >0 (set to %v)", cfg.CompactHashCheckTime)
 	}
 
 	// If `--name` isn't configured, then multiple members may have the same "default" name.

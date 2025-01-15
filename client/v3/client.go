@@ -220,7 +220,7 @@ func (c *Client) autoSync() {
 			ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 			err := c.Sync(ctx)
 			cancel()
-			if err != nil && err != c.ctx.Err() {
+			if err != nil && !errors.Is(err, c.ctx.Err()) {
 				c.lg.Info("Auto sync endpoints failed.", zap.Error(err))
 			}
 		}
@@ -294,7 +294,7 @@ func (c *Client) getToken(ctx context.Context) error {
 
 	resp, err := c.Auth.Authenticate(ctx, c.Username, c.Password)
 	if err != nil {
-		if err == rpctypes.ErrAuthNotEnabled {
+		if errors.Is(err, rpctypes.ErrAuthNotEnabled) {
 			c.authTokenBundle.UpdateAuthToken("")
 			return nil
 		}
@@ -458,7 +458,7 @@ func newClient(cfg *Config) (*Client, error) {
 	client.Auth = NewAuth(client)
 	client.Maintenance = NewMaintenance(client)
 
-	//get token with established connection
+	// get token with established connection
 	ctx, cancel = client.ctx, func() {}
 	if client.cfg.DialTimeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, client.cfg.DialTimeout)
@@ -467,7 +467,7 @@ func newClient(cfg *Config) (*Client, error) {
 	if err != nil {
 		client.Close()
 		cancel()
-		//TODO: Consider fmt.Errorf("communicating with [%s] failed: %v", strings.Join(cfg.Endpoints, ";"), err)
+		// TODO: Consider fmt.Errorf("communicating with [%s] failed: %v", strings.Join(cfg.Endpoints, ";"), err)
 		return nil, err
 	}
 	cancel()
@@ -605,7 +605,8 @@ func ContextError(ctx context.Context, err error) error {
 		return nil
 	}
 	err = rpctypes.Error(err)
-	if _, ok := err.(rpctypes.EtcdError); ok {
+	var serverErr rpctypes.EtcdError
+	if errors.As(err, &serverErr) {
 		return err
 	}
 	if ev, ok := status.FromError(err); ok {
@@ -627,7 +628,7 @@ func canceledByCaller(stopCtx context.Context, err error) bool {
 		return false
 	}
 
-	return err == context.Canceled || err == context.DeadlineExceeded
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // IsConnCanceled returns true, if error is from a closed gRPC connection.
@@ -645,7 +646,7 @@ func IsConnCanceled(err error) bool {
 	}
 
 	// >= gRPC v1.10.x
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return true
 	}
 

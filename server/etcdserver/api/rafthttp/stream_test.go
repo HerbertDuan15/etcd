@@ -234,6 +234,7 @@ func (wrc *waitReadCloser) Read(p []byte) (int, error) {
 	<-wrc.closec
 	return 0, io.EOF
 }
+
 func (wrc *waitReadCloser) Close() error {
 	close(wrc.closec)
 	return nil
@@ -256,7 +257,7 @@ func TestStreamReaderDialDetectUnsupport(t *testing.T) {
 		}
 
 		_, err := sr.dial(typ)
-		if err != errUnsupportedStreamType {
+		if !errors.Is(err, errUnsupportedStreamType) {
 			t.Errorf("#%d: error = %v, want %v", i, err, errUnsupportedStreamType)
 		}
 	}

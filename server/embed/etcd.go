@@ -48,6 +48,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/etcdhttp"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
+	"go.etcd.io/etcd/server/v3/features"
 	"go.etcd.io/etcd/server/v3/storage"
 	"go.etcd.io/etcd/server/v3/verify"
 )
@@ -83,6 +84,7 @@ type Etcd struct {
 	errc  chan error
 
 	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 type peerListener struct {
@@ -108,7 +110,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		if !serving {
 			// errored before starting gRPC server for serveCtx.serversC
 			for _, sctx := range e.sctxs {
-				close(sctx.serversC)
+				sctx.close()
 			}
 		}
 		e.Close()
@@ -151,7 +153,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		memberInitialized = false
 		urlsmap, token, err = cfg.PeerURLsMapAndToken("etcd")
 		if err != nil {
-			return e, fmt.Errorf("error setting up initial cluster: %v", err)
+			return e, fmt.Errorf("error setting up initial cluster: %w", err)
 		}
 	}
 
@@ -167,62 +169,59 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 	backendFreelistType := parseBackendFreelistType(cfg.BackendFreelistType)
 
 	srvcfg := config.ServerConfig{
-		Name:                                     cfg.Name,
-		ClientURLs:                               cfg.AdvertiseClientUrls,
-		PeerURLs:                                 cfg.AdvertisePeerUrls,
-		DataDir:                                  cfg.Dir,
-		DedicatedWALDir:                          cfg.WalDir,
-		SnapshotCount:                            cfg.SnapshotCount,
-		SnapshotCatchUpEntries:                   cfg.SnapshotCatchUpEntries,
-		MaxSnapFiles:                             cfg.MaxSnapFiles,
-		MaxWALFiles:                              cfg.MaxWalFiles,
-		InitialPeerURLsMap:                       urlsmap,
-		InitialClusterToken:                      token,
-		DiscoveryURL:                             cfg.Durl,
-		DiscoveryProxy:                           cfg.Dproxy,
-		DiscoveryCfg:                             cfg.DiscoveryCfg,
-		NewCluster:                               cfg.IsNewCluster(),
-		PeerTLSInfo:                              cfg.PeerTLSInfo,
-		TickMs:                                   cfg.TickMs,
-		ElectionTicks:                            cfg.ElectionTicks(),
-		InitialElectionTickAdvance:               cfg.InitialElectionTickAdvance,
-		AutoCompactionRetention:                  autoCompactionRetention,
-		AutoCompactionMode:                       cfg.AutoCompactionMode,
-		QuotaBackendBytes:                        cfg.QuotaBackendBytes,
-		BackendBatchLimit:                        cfg.BackendBatchLimit,
-		BackendFreelistType:                      backendFreelistType,
-		BackendBatchInterval:                     cfg.BackendBatchInterval,
-		MaxTxnOps:                                cfg.MaxTxnOps,
-		MaxRequestBytes:                          cfg.MaxRequestBytes,
-		MaxConcurrentStreams:                     cfg.MaxConcurrentStreams,
-		SocketOpts:                               cfg.SocketOpts,
-		StrictReconfigCheck:                      cfg.StrictReconfigCheck,
-		ClientCertAuthEnabled:                    cfg.ClientTLSInfo.ClientCertAuth,
-		AuthToken:                                cfg.AuthToken,
-		BcryptCost:                               cfg.BcryptCost,
-		TokenTTL:                                 cfg.AuthTokenTTL,
-		CORS:                                     cfg.CORS,
-		HostWhitelist:                            cfg.HostWhitelist,
-		InitialCorruptCheck:                      cfg.ExperimentalInitialCorruptCheck,
-		CorruptCheckTime:                         cfg.ExperimentalCorruptCheckTime,
-		CompactHashCheckEnabled:                  cfg.ExperimentalCompactHashCheckEnabled,
-		CompactHashCheckTime:                     cfg.ExperimentalCompactHashCheckTime,
-		PreVote:                                  cfg.PreVote,
-		Logger:                                   cfg.logger,
-		ForceNewCluster:                          cfg.ForceNewCluster,
-		EnableGRPCGateway:                        cfg.EnableGRPCGateway,
-		ExperimentalEnableDistributedTracing:     cfg.ExperimentalEnableDistributedTracing,
-		UnsafeNoFsync:                            cfg.UnsafeNoFsync,
-		EnableLeaseCheckpoint:                    cfg.ExperimentalEnableLeaseCheckpoint,
-		LeaseCheckpointPersist:                   cfg.ExperimentalEnableLeaseCheckpointPersist,
-		CompactionBatchLimit:                     cfg.ExperimentalCompactionBatchLimit,
-		CompactionSleepInterval:                  cfg.ExperimentalCompactionSleepInterval,
-		WatchProgressNotifyInterval:              cfg.ExperimentalWatchProgressNotifyInterval,
-		DowngradeCheckTime:                       cfg.ExperimentalDowngradeCheckTime,
-		WarningApplyDuration:                     cfg.ExperimentalWarningApplyDuration,
-		WarningUnaryRequestDuration:              cfg.WarningUnaryRequestDuration,
-		ExperimentalMemoryMlock:                  cfg.ExperimentalMemoryMlock,
-		ExperimentalTxnModeWriteWithSharedBuffer: cfg.ExperimentalTxnModeWriteWithSharedBuffer,
+		Name:                                 cfg.Name,
+		ClientURLs:                           cfg.AdvertiseClientUrls,
+		PeerURLs:                             cfg.AdvertisePeerUrls,
+		DataDir:                              cfg.Dir,
+		DedicatedWALDir:                      cfg.WalDir,
+		SnapshotCount:                        cfg.SnapshotCount,
+		SnapshotCatchUpEntries:               cfg.SnapshotCatchUpEntries,
+		MaxSnapFiles:                         cfg.MaxSnapFiles,
+		MaxWALFiles:                          cfg.MaxWalFiles,
+		InitialPeerURLsMap:                   urlsmap,
+		InitialClusterToken:                  token,
+		DiscoveryURL:                         cfg.Durl,
+		DiscoveryProxy:                       cfg.Dproxy,
+		DiscoveryCfg:                         cfg.DiscoveryCfg,
+		NewCluster:                           cfg.IsNewCluster(),
+		PeerTLSInfo:                          cfg.PeerTLSInfo,
+		TickMs:                               cfg.TickMs,
+		ElectionTicks:                        cfg.ElectionTicks(),
+		InitialElectionTickAdvance:           cfg.InitialElectionTickAdvance,
+		AutoCompactionRetention:              autoCompactionRetention,
+		AutoCompactionMode:                   cfg.AutoCompactionMode,
+		QuotaBackendBytes:                    cfg.QuotaBackendBytes,
+		BackendBatchLimit:                    cfg.BackendBatchLimit,
+		BackendFreelistType:                  backendFreelistType,
+		BackendBatchInterval:                 cfg.BackendBatchInterval,
+		MaxTxnOps:                            cfg.MaxTxnOps,
+		MaxRequestBytes:                      cfg.MaxRequestBytes,
+		MaxConcurrentStreams:                 cfg.MaxConcurrentStreams,
+		SocketOpts:                           cfg.SocketOpts,
+		StrictReconfigCheck:                  cfg.StrictReconfigCheck,
+		ClientCertAuthEnabled:                cfg.ClientTLSInfo.ClientCertAuth,
+		AuthToken:                            cfg.AuthToken,
+		BcryptCost:                           cfg.BcryptCost,
+		TokenTTL:                             cfg.AuthTokenTTL,
+		CORS:                                 cfg.CORS,
+		HostWhitelist:                        cfg.HostWhitelist,
+		CorruptCheckTime:                     cfg.CorruptCheckTime,
+		CompactHashCheckTime:                 cfg.CompactHashCheckTime,
+		PreVote:                              cfg.PreVote,
+		Logger:                               cfg.logger,
+		ForceNewCluster:                      cfg.ForceNewCluster,
+		EnableGRPCGateway:                    cfg.EnableGRPCGateway,
+		ExperimentalEnableDistributedTracing: cfg.ExperimentalEnableDistributedTracing,
+		UnsafeNoFsync:                        cfg.UnsafeNoFsync,
+		EnableLeaseCheckpoint:                cfg.ExperimentalEnableLeaseCheckpoint,
+		LeaseCheckpointPersist:               cfg.ExperimentalEnableLeaseCheckpointPersist,
+		CompactionBatchLimit:                 cfg.ExperimentalCompactionBatchLimit,
+		CompactionSleepInterval:              cfg.ExperimentalCompactionSleepInterval,
+		WatchProgressNotifyInterval:          cfg.ExperimentalWatchProgressNotifyInterval,
+		DowngradeCheckTime:                   cfg.ExperimentalDowngradeCheckTime,
+		WarningApplyDuration:                 cfg.ExperimentalWarningApplyDuration,
+		WarningUnaryRequestDuration:          cfg.WarningUnaryRequestDuration,
+		ExperimentalMemoryMlock:              cfg.ExperimentalMemoryMlock,
 		ExperimentalBootstrapDefragThresholdMegabytes: cfg.ExperimentalBootstrapDefragThresholdMegabytes,
 		ExperimentalMaxLearners:                       cfg.ExperimentalMaxLearners,
 		V2Deprecation:                                 cfg.V2DeprecationEffective(),
@@ -259,7 +258,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 
 	// newly started member ("memberInitialized==false")
 	// does not need corruption check
-	if memberInitialized && srvcfg.InitialCorruptCheck {
+	if memberInitialized && srvcfg.ServerFeatureGate.Enabled(features.InitialCorruptCheck) {
 		if err = e.Server.CorruptionChecker().InitialCheck(); err != nil {
 			// set "EtcdServer" to nil, so that it does not block on "EtcdServer.Close()"
 			// (nothing to close since rafthttp transports have not been started)
@@ -351,9 +350,9 @@ func print(lg *zap.Logger, ec Config, sc config.ServerConfig, memberInitialized 
 		zap.Uint32("max-concurrent-streams", sc.MaxConcurrentStreams),
 
 		zap.Bool("pre-vote", sc.PreVote),
+		zap.String(ServerFeatureGateFlagName, sc.ServerFeatureGate.String()),
 		zap.Bool("initial-corrupt-check", sc.InitialCorruptCheck),
 		zap.String("corrupt-check-time-interval", sc.CorruptCheckTime.String()),
-		zap.Bool("compact-check-time-enabled", sc.CompactHashCheckEnabled),
 		zap.Duration("compact-check-time-interval", sc.CompactHashCheckTime),
 		zap.String("auto-compaction-mode", sc.AutoCompactionMode),
 		zap.Duration("auto-compaction-retention", sc.AutoCompactionRetention),
@@ -376,6 +375,8 @@ func print(lg *zap.Logger, ec Config, sc config.ServerConfig, memberInitialized 
 
 		zap.String("downgrade-check-interval", sc.DowngradeCheckTime.String()),
 		zap.Int("max-learners", sc.ExperimentalMaxLearners),
+
+		zap.String("v2-deprecation", string(ec.V2Deprecation)),
 	)
 }
 
@@ -456,6 +457,7 @@ func (e *Etcd) Close() {
 		}
 	}
 	if e.errc != nil {
+		e.wg.Wait()
 		close(e.errc)
 	}
 }
@@ -664,7 +666,7 @@ func configureClientListeners(cfg *Config) (sctxs map[string]*serveCtx, err erro
 			sctx = newServeCtx(cfg.logger)
 			sctxs[addr] = sctx
 		} else if !sctx.httpOnly {
-			return nil, fmt.Errorf("cannot bind both --client-listen-urls and --client-listen-http-urls on the same url %s", u.String())
+			return nil, fmt.Errorf("cannot bind both --listen-client-urls and --listen-client-http-urls on the same url %s", u.String())
 		}
 		sctx.secure = sctx.secure || secure
 		sctx.insecure = sctx.insecure || !secure
@@ -870,6 +872,9 @@ func (e *Etcd) serveMetrics() (err error) {
 }
 
 func (e *Etcd) errHandler(err error) {
+	e.wg.Add(1)
+	defer e.wg.Done()
+
 	if err != nil {
 		e.GetLogger().Error("setting up serving from embedded etcd failed.", zap.Error(err))
 	}
@@ -907,7 +912,7 @@ func parseCompactionRetention(mode, retention string) (ret time.Duration, err er
 		// periodic compaction
 		ret, err = time.ParseDuration(retention)
 		if err != nil {
-			return 0, fmt.Errorf("error parsing CompactionRetention: %v", err)
+			return 0, fmt.Errorf("error parsing CompactionRetention: %w", err)
 		}
 	}
 	return ret, nil

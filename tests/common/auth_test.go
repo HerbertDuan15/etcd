@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -28,9 +29,11 @@ import (
 	"go.etcd.io/etcd/tests/v3/framework/testutils"
 )
 
-var tokenTTL = time.Second
-var defaultAuthToken = fmt.Sprintf("jwt,pub-key=%s,priv-key=%s,sign-method=RS256,ttl=%s",
-	mustAbsPath("../fixtures/server.crt"), mustAbsPath("../fixtures/server.key.insecure"), tokenTTL)
+var (
+	tokenTTL         = time.Second * 3
+	defaultAuthToken = fmt.Sprintf("jwt,pub-key=%s,priv-key=%s,sign-method=RS256,ttl=%s",
+		mustAbsPath("../fixtures/server.crt"), mustAbsPath("../fixtures/server.key.insecure"), tokenTTL)
+)
 
 const (
 	PermissionDenied      = "etcdserver: permission denied"
@@ -110,7 +113,7 @@ func TestAuthGracefulDisable(t *testing.T) {
 				return
 			}
 			// the watcher should still work after reconnecting
-			require.NoErrorf(t, rootAuthClient.Put(ctx, "key", "value", config.PutOptions{}), "failed to put key value")
+			assert.NoErrorf(t, rootAuthClient.Put(ctx, "key", "value", config.PutOptions{}), "failed to put key value")
 		}()
 
 		wCtx, wCancel := context.WithCancel(ctx)
@@ -378,14 +381,12 @@ func TestAuthTxn(t *testing.T) {
 				// keys with 2 suffix are granted to test-user, see Line 399
 				grantedKeys := []string{"c2", "s2", "f2"}
 				for _, key := range keys {
-					if err := cc.Put(ctx, key, "v", config.PutOptions{}); err != nil {
-						t.Fatal(err)
-					}
+					err := cc.Put(ctx, key, "v", config.PutOptions{})
+					require.NoError(t, err)
 				}
 				for _, key := range grantedKeys {
-					if err := cc.Put(ctx, key, "v", config.PutOptions{}); err != nil {
-						t.Fatal(err)
-					}
+					err := cc.Put(ctx, key, "v", config.PutOptions{})
+					require.NoError(t, err)
 				}
 
 				require.NoErrorf(t, setupAuth(cc, []authRole{testRole}, []authUser{rootUser, testUser}), "failed to enable auth")
@@ -394,9 +395,8 @@ func TestAuthTxn(t *testing.T) {
 
 				// grant keys to test-user
 				for _, key := range grantedKeys {
-					if _, err := rootAuthClient.RoleGrantPermission(ctx, testRoleName, key, "", clientv3.PermissionType(clientv3.PermReadWrite)); err != nil {
-						t.Fatal(err)
-					}
+					_, err := rootAuthClient.RoleGrantPermission(ctx, testRoleName, key, "", clientv3.PermissionType(clientv3.PermReadWrite))
+					require.NoError(t, err)
 				}
 				for _, req := range reqs {
 					resp, err := testUserAuthClient.Txn(ctx, req.compare, req.ifSuccess, req.ifFail, config.TxnOptions{
@@ -623,7 +623,7 @@ func TestAuthMemberRemove(t *testing.T) {
 				break
 			}
 		}
-		require.False(t, found, "expect removed member not found in member remove response")
+		require.Falsef(t, found, "expect removed member not found in member remove response")
 	})
 }
 

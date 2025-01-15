@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -49,18 +50,16 @@ func TestMaintenanceHashKV(t *testing.T) {
 	defer clus.Terminate(t)
 
 	for i := 0; i < 3; i++ {
-		if _, err := clus.RandClient().Put(context.Background(), "foo", "bar"); err != nil {
-			t.Fatal(err)
-		}
+		_, err := clus.RandClient().Put(context.Background(), "foo", "bar")
+		require.NoError(t, err)
 	}
 
 	var hv uint32
 	for i := 0; i < 3; i++ {
 		cli := clus.Client(i)
 		// ensure writes are replicated
-		if _, err := cli.Get(context.TODO(), "foo"); err != nil {
-			t.Fatal(err)
-		}
+		_, err := cli.Get(context.TODO(), "foo")
+		require.NoError(t, err)
 		hresp, err := cli.HashKV(context.Background(), clus.Members[i].GRPCURL, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -135,7 +134,7 @@ func TestMaintenanceMoveLeader(t *testing.T) {
 
 	cli := clus.Client(targetIdx)
 	_, err := cli.MoveLeader(context.Background(), target)
-	if err != rpctypes.ErrNotLeader {
+	if !errors.Is(err, rpctypes.ErrNotLeader) {
 		t.Fatalf("error expected %v, got %v", rpctypes.ErrNotLeader, err)
 	}
 
@@ -181,12 +180,12 @@ func TestMaintenanceSnapshotCancel(t *testing.T) {
 	// read 16 bytes to ensure that server opens snapshot
 	buf := make([]byte, 16)
 	n, err := rc1.Read(buf)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 16, n)
 
 	cancel()
 	_, err = io.Copy(io.Discard, rc1)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected %v, got %v", context.Canceled, err)
 	}
 }
@@ -303,7 +302,7 @@ func testMaintenanceSnapshotErrorInflight(t *testing.T, snapshot func(context.Co
 		close(donec)
 	}()
 	_, err = io.Copy(io.Discard, rc1)
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Errorf("expected %v, got %v", context.Canceled, err)
 	}
 	<-donec
@@ -377,7 +376,7 @@ func TestMaintenanceSnapshotContentDigest(t *testing.T) {
 
 	checksumInBytes, err := io.ReadAll(snapFile)
 	require.NoError(t, err)
-	require.Equal(t, int(checksumSize), len(checksumInBytes))
+	require.Len(t, checksumInBytes, int(checksumSize))
 
 	// remove the checksum part and rehash
 	err = snapFile.Truncate(snapSize - checksumSize)

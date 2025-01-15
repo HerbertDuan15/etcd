@@ -34,6 +34,10 @@ import (
 	"go.etcd.io/etcd/server/v3/storage/datadir"
 )
 
+const (
+	grpcOverheadBytes = 512 * 1024
+)
+
 // ServerConfig holds the configuration of etcd as taken from the command line or discovery.
 type ServerConfig struct {
 	Name string
@@ -143,10 +147,9 @@ type ServerConfig struct {
 
 	// InitialCorruptCheck is true to check data corruption on boot
 	// before serving any peer/client traffic.
-	InitialCorruptCheck     bool
-	CorruptCheckTime        time.Duration
-	CompactHashCheckEnabled bool
-	CompactHashCheckTime    time.Duration
+	InitialCorruptCheck  bool
+	CorruptCheckTime     time.Duration
+	CompactHashCheckTime time.Duration
 
 	// PreVote is true to enable Raft Pre-Vote.
 	PreVote bool
@@ -285,7 +288,7 @@ func (c *ServerConfig) advertiseMatchesCluster() error {
 		}
 		mstr := strings.Join(missing, ",")
 		apStr := strings.Join(apurls, ",")
-		return fmt.Errorf("--initial-cluster has %s but missing from --initial-advertise-peer-urls=%s (%v)", mstr, apStr, err)
+		return fmt.Errorf("--initial-cluster has %s but missing from --initial-advertise-peer-urls=%s (%w)", mstr, apStr, err)
 	}
 
 	for url := range apMap {
@@ -302,7 +305,7 @@ func (c *ServerConfig) advertiseMatchesCluster() error {
 	// resolved URLs from "--initial-advertise-peer-urls" and "--initial-cluster" did not match or failed
 	apStr := strings.Join(apurls, ",")
 	umap := types.URLsMap(map[string]types.URLs{c.Name: c.PeerURLs})
-	return fmt.Errorf("failed to resolve %s to match --initial-cluster=%s (%v)", apStr, umap.String(), err)
+	return fmt.Errorf("failed to resolve %s to match --initial-cluster=%s (%w)", apStr, umap.String(), err)
 }
 
 func (c *ServerConfig) MemberDir() string { return datadir.ToMemberDir(c.DataDir) }
@@ -358,3 +361,7 @@ func (c *ServerConfig) BootstrapTimeoutEffective() time.Duration {
 }
 
 func (c *ServerConfig) BackendPath() string { return datadir.ToBackendFileName(c.DataDir) }
+
+func (c *ServerConfig) MaxRequestBytesWithOverhead() uint {
+	return c.MaxRequestBytes + grpcOverheadBytes
+}

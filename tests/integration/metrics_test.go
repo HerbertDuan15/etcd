@@ -26,10 +26,9 @@ import (
 
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/client/pkg/v3/transport"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/storage"
 	"go.etcd.io/etcd/tests/v3/framework/integration"
-
-	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // TestMetricDbSizeBoot checks that the db size metric is set on boot.
@@ -66,9 +65,8 @@ func testMetricDbSizeDefrag(t *testing.T, name string) {
 	putreq := &pb.PutRequest{Key: []byte("k"), Value: make([]byte, 4096)}
 	for i := 0; i < numPuts; i++ {
 		time.Sleep(10 * time.Millisecond) // to execute multiple backend txn
-		if _, err := kvc.Put(context.TODO(), putreq); err != nil {
-			t.Fatal(err)
-		}
+		_, err := kvc.Put(context.TODO(), putreq)
+		require.NoError(t, err)
 	}
 
 	// wait for backend txn sync
@@ -136,7 +134,7 @@ func testMetricDbSizeDefrag(t *testing.T, name string) {
 		}
 		retry++
 		if retry >= maxRetry {
-			t.Fatalf(err.Error())
+			t.Fatalf("%v", err.Error())
 		}
 	}
 
@@ -224,7 +222,8 @@ func TestMetricsRangeDurationSeconds(t *testing.T) {
 	client := clus.RandClient()
 
 	keys := []string{
-		"my-namespace/foobar", "my-namespace/foobar1", "namespace/foobar1"}
+		"my-namespace/foobar", "my-namespace/foobar1", "namespace/foobar1",
+	}
 	for _, key := range keys {
 		_, err := client.Put(context.Background(), key, "data")
 		require.NoError(t, err)
@@ -236,12 +235,12 @@ func TestMetricsRangeDurationSeconds(t *testing.T) {
 	rangeDurationSeconds, err := clus.Members[0].Metric("etcd_server_range_duration_seconds")
 	require.NoError(t, err)
 
-	require.NotEmpty(t, rangeDurationSeconds, "expected a number from etcd_server_range_duration_seconds")
+	require.NotEmptyf(t, rangeDurationSeconds, "expected a number from etcd_server_range_duration_seconds")
 
 	rangeDuration, err := strconv.ParseFloat(rangeDurationSeconds, 64)
-	require.NoError(t, err, "failed to parse duration: %s", err)
+	require.NoErrorf(t, err, "failed to parse duration: %s", rangeDurationSeconds)
 
 	maxRangeDuration := 600.0
-	require.GreaterOrEqual(t, rangeDuration, 0.0, "expected etcd_server_range_duration_seconds to be between 0 and %f, got %f", maxRangeDuration, rangeDuration)
-	require.LessOrEqual(t, rangeDuration, maxRangeDuration, "expected etcd_server_range_duration_seconds to be between 0 and %f, got %f", maxRangeDuration, rangeDuration)
+	require.GreaterOrEqualf(t, rangeDuration, 0.0, "expected etcd_server_range_duration_seconds to be between 0 and %f, got %f", maxRangeDuration, rangeDuration)
+	require.LessOrEqualf(t, rangeDuration, maxRangeDuration, "expected etcd_server_range_duration_seconds to be between 0 and %f, got %f", maxRangeDuration, rangeDuration)
 }
