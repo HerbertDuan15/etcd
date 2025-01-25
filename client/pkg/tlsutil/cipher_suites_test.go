@@ -17,16 +17,17 @@ package tlsutil
 import (
 	"crypto/tls"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetCipherSuite_not_existing(t *testing.T) {
 	_, ok := GetCipherSuite("not_existing")
-	if ok {
-		t.Fatal("Expected not ok")
-	}
+	require.Falsef(t, ok, "Expected not ok")
 }
 
 func CipherSuiteExpectedToExist(tb testing.TB, cipher string, expectedID uint16) {
+	tb.Helper()
 	vid, ok := GetCipherSuite(cipher)
 	if !ok {
 		tb.Errorf("Expected %v cipher to exist", cipher)

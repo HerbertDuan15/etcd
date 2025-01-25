@@ -112,16 +112,6 @@ func visitEntryData(entryType raftpb.EntryType, data []byte, visitor Visitor) er
 			break
 		}
 		msg = proto.MessageReflect(&raftReq)
-		if raftReq.ClusterVersionSet != nil {
-			ver, err := semver.NewVersion(raftReq.ClusterVersionSet.Ver)
-			if err != nil {
-				return err
-			}
-			err = visitor(msg.Descriptor().FullName(), ver)
-			if err != nil {
-				return err
-			}
-		}
 	case raftpb.EntryConfChange:
 		var confChange raftpb.ConfChange
 		err := pbutil.Unmarshaler(&confChange).Unmarshal(data)
@@ -187,10 +177,7 @@ func visitMessage(m protoreflect.Message, visitor Visitor) error {
 		case protoreflect.EnumNumber:
 			err = visitEnumNumber(fd.Enum(), m, visitor)
 		}
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	})
 	return err
 }
@@ -243,7 +230,7 @@ func visitDescriptor(md protoreflect.Descriptor, visitor Visitor) error {
 	}
 	ver, err := etcdVersionFromOptionsString(opts.String())
 	if err != nil {
-		return fmt.Errorf("%s: %s", md.FullName(), err)
+		return fmt.Errorf("%s: %w", md.FullName(), err)
 	}
 	return visitor(md.FullName(), ver)
 }

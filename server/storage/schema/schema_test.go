@@ -15,6 +15,7 @@
 package schema
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -23,7 +24,6 @@ import (
 	"go.uber.org/zap"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
-	"go.etcd.io/etcd/api/v3/membershippb"
 	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/server/v3/storage/backend"
 	betesting "go.etcd.io/etcd/server/v3/storage/backend/testing"
@@ -180,17 +180,17 @@ func TestMigrate(t *testing.T) {
 			},
 			expectVersion: nil,
 		},
+		/* TODO: add a dedicated request for testing only to cover such case
 		{
-			name:          "Downgrading v3.6 to v3.5 fails if there are newer WAL entries",
+			name:          "Downgrading v3.6 to v3.5 works even if there is ClusterVersionSetRequest WAL entries with 3.6 clusterVersion",
 			version:       version.V3_6,
 			targetVersion: version.V3_5,
 			walEntries: []etcdserverpb.InternalRaftRequest{
 				{ClusterVersionSet: &membershippb.ClusterVersionSetRequest{Ver: "3.6.0"}},
 			},
-			expectVersion:  &version.V3_6,
-			expectError:    true,
-			expectErrorMsg: "cannot downgrade storage, WAL contains newer entries",
-		},
+			expectVersion: nil, // 3.5 doesn't have field `storageVersion`, so it should be nil.
+			expectError:   false,
+		},*/
 		{
 			name:           "Downgrading v3.5 to v3.4 is not supported as schema was introduced in v3.6",
 			version:        version.V3_5,
@@ -218,7 +218,7 @@ func TestMigrate(t *testing.T) {
 			if (err != nil) != tc.expectError {
 				t.Errorf("Migrate(lg, tx, %q) = %+v, expected error: %v", tc.targetVersion, err, tc.expectError)
 			}
-			if err != nil && err.Error() != tc.expectErrorMsg {
+			if err != nil && !strings.Contains(err.Error(), tc.expectErrorMsg) {
 				t.Errorf("Migrate(lg, tx, %q) = %q, expected error message: %q", tc.targetVersion, err, tc.expectErrorMsg)
 			}
 			v := UnsafeReadStorageVersion(b.BatchTx())

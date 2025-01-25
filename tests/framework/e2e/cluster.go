@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -312,6 +313,10 @@ func WithLogLevel(level string) EPClusterOption {
 }
 
 func WithCorruptCheckTime(time time.Duration) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CorruptCheckTime = time }
+}
+
+func WithExperimentalCorruptCheckTime(time time.Duration) EPClusterOption {
 	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalCorruptCheckTime = time }
 }
 
@@ -328,7 +333,7 @@ func WithCompactHashCheckEnabled(enabled bool) EPClusterOption {
 }
 
 func WithCompactHashCheckTime(time time.Duration) EPClusterOption {
-	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalCompactHashCheckTime = time }
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CompactHashCheckTime = time }
 }
 
 func WithGoFailEnabled(enabled bool) EPClusterOption {
@@ -368,6 +373,10 @@ func WithServerFeatureGate(featureName string, val bool) EPClusterOption {
 }
 
 func WithCompactionBatchLimit(limit int) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CompactionBatchLimit = limit }
+}
+
+func WithExperimentalCompactionBatchLimit(limit int) EPClusterOption {
 	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalCompactionBatchLimit = limit }
 }
 
@@ -376,6 +385,10 @@ func WithCompactionSleepInterval(time time.Duration) EPClusterOption {
 }
 
 func WithWatchProcessNotifyInterval(interval time.Duration) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.WatchProgressNotifyInterval = interval }
+}
+
+func WithExperimentalWatchProcessNotifyInterval(interval time.Duration) EPClusterOption {
 	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ExperimentalWatchProgressNotifyInterval = interval }
 }
 
@@ -385,6 +398,22 @@ func WithEnvVars(ev map[string]string) EPClusterOption {
 
 func WithPeerProxy(enabled bool) EPClusterOption {
 	return func(c *EtcdProcessClusterConfig) { c.PeerProxy = enabled }
+}
+
+func WithClientHTTPSeparate(enabled bool) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ClientHTTPSeparate = enabled }
+}
+
+func WithForceNewCluster(enabled bool) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.ForceNewCluster = enabled }
+}
+
+func WithMetricsURLScheme(scheme string) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.MetricsURLScheme = scheme }
+}
+
+func WithCipherSuites(suites []string) EPClusterOption {
+	return func(c *EtcdProcessClusterConfig) { c.ServerConfig.CipherSuites = suites }
 }
 
 // NewEtcdProcessCluster launches a new cluster from etcd processes, returning
@@ -437,7 +466,7 @@ func InitEtcdProcessCluster(t testing.TB, cfg *EtcdProcessClusterConfig) (*EtcdP
 		proc, err := NewEtcdProcess(t, etcdCfgs[i])
 		if err != nil {
 			epc.Close()
-			return nil, fmt.Errorf("cannot configure: %v", err)
+			return nil, fmt.Errorf("cannot configure: %w", err)
 		}
 		epc.Procs[i] = proc
 	}
@@ -449,11 +478,11 @@ func InitEtcdProcessCluster(t testing.TB, cfg *EtcdProcessClusterConfig) (*EtcdP
 func StartEtcdProcessCluster(ctx context.Context, t testing.TB, epc *EtcdProcessCluster, cfg *EtcdProcessClusterConfig) (*EtcdProcessCluster, error) {
 	if cfg.RollingStart {
 		if err := epc.RollingStart(ctx); err != nil {
-			return nil, fmt.Errorf("cannot rolling-start: %v", err)
+			return nil, fmt.Errorf("cannot rolling-start: %w", err)
 		}
 	} else {
 		if err := epc.Start(ctx); err != nil {
-			return nil, fmt.Errorf("cannot start: %v", err)
+			return nil, fmt.Errorf("cannot start: %w", err)
 		}
 	}
 
@@ -465,7 +494,7 @@ func StartEtcdProcessCluster(ctx context.Context, t testing.TB, epc *EtcdProcess
 	}
 	if cfg.InitialLeaderIndex >= 0 {
 		if err := epc.MoveLeader(ctx, t, cfg.InitialLeaderIndex); err != nil {
-			return nil, fmt.Errorf("failed to move leader: %v", err)
+			return nil, fmt.Errorf("failed to move leader: %w", err)
 		}
 	}
 	return epc, nil
@@ -572,7 +601,7 @@ func (cfg *EtcdProcessClusterConfig) EtcdServerProcessConfig(tb testing.TB, i in
 	}
 
 	if cfg.ServerConfig.ForceNewCluster {
-		args = append(args, "--force-new-cluster")
+		args = append(args, "--force-new-cluster=true")
 	}
 	if cfg.ServerConfig.QuotaBackendBytes > 0 {
 		args = append(args,
@@ -583,7 +612,7 @@ func (cfg *EtcdProcessClusterConfig) EtcdServerProcessConfig(tb testing.TB, i in
 		args = append(args, "--strict-reconfig-check=false")
 	}
 	if cfg.EnableV2 {
-		args = append(args, "--enable-v2")
+		args = append(args, "--enable-v2=true")
 	}
 	var murl string
 	if cfg.MetricsURLScheme != "" {
@@ -634,9 +663,7 @@ func (cfg *EtcdProcessClusterConfig) EtcdServerProcessConfig(tb testing.TB, i in
 		args = append(args, fmt.Sprintf("--%s=%s", flag, value))
 	}
 	envVars := map[string]string{}
-	for key, value := range cfg.EnvVars {
-		envVars[key] = value
-	}
+	maps.Copy(envVars, cfg.EnvVars)
 	var gofailPort int
 	if cfg.GoFailEnabled {
 		gofailPort = (i+1)*10000 + 2381
@@ -864,7 +891,7 @@ func (epc *EtcdProcessCluster) StartNewProcFromConfig(ctx context.Context, tb te
 	proc, err := NewEtcdProcess(tb, serverCfg)
 	if err != nil {
 		epc.Close()
-		return fmt.Errorf("cannot configure: %v", err)
+		return fmt.Errorf("cannot configure: %w", err)
 	}
 
 	epc.Procs = append(epc.Procs, proc)
@@ -947,7 +974,7 @@ func (epc *EtcdProcessCluster) Stop() (err error) {
 		}
 		if curErr := p.Stop(); curErr != nil {
 			if err != nil {
-				err = fmt.Errorf("%v; %v", err, curErr)
+				err = fmt.Errorf("%w; %w", err, curErr)
 			} else {
 				err = curErr
 			}
@@ -969,7 +996,7 @@ func (epc *EtcdProcessCluster) ConcurrentStop() (err error) {
 	for range epc.Procs {
 		if curErr := <-errCh; curErr != nil {
 			if err != nil {
-				err = fmt.Errorf("%v; %v", err, curErr)
+				err = fmt.Errorf("%w; %w", err, curErr)
 			} else {
 				err = curErr
 			}
@@ -1055,9 +1082,8 @@ func (epc *EtcdProcessCluster) WaitMembersForLeader(ctx context.Context, t testi
 				if strings.Contains(err.Error(), "connection refused") {
 					// if member[i] has stopped
 					continue
-				} else {
-					t.Fatal(err)
 				}
+				t.Fatal(err)
 			}
 			members[resp[0].Header.MemberId] = i
 			leaders[resp[0].Leader] = struct{}{}

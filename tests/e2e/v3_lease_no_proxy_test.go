@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -65,9 +66,7 @@ func testLeaseRevokeIssue(t *testing.T, clusterSize int, connectToOneFollower bo
 	)
 	require.NoError(t, err)
 	defer func() {
-		if errC := epc.Close(); errC != nil {
-			t.Fatalf("error closing etcd processes (%v)", errC)
-		}
+		require.NoErrorf(t, epc.Close(), "error closing etcd processes")
 	}()
 
 	leaderIdx := epc.WaitLeader(t)
@@ -106,7 +105,7 @@ func testLeaseRevokeIssue(t *testing.T, clusterSize int, connectToOneFollower bo
 		defer close(doneC)
 
 		respC, kerr := clientForKeepAlive.KeepAlive(ctx, leaseRsp.ID)
-		require.NoError(t, kerr)
+		assert.NoError(t, kerr)
 		// ensure we have received the first response from the server
 		<-respC
 		startC <- struct{}{}
@@ -159,7 +158,7 @@ func testLeaseRevokeIssue(t *testing.T, clusterSize int, connectToOneFollower bo
 	t.Log("Confirming the lease isn't revoked")
 	leases, err := client.Leases(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, len(leases.Leases))
+	require.Len(t, leases.Leases, 1)
 
 	t.Log("Waiting for the keepAlive goroutine to exit")
 	close(stopC)

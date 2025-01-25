@@ -749,7 +749,6 @@ func (as *authStore) RoleDelete(r *pb.AuthRoleDeleteRequest) (*pb.AuthRoleDelete
 		}
 
 		tx.UnsafePutUser(updatedUser)
-
 	}
 
 	as.commitRevision(tx)
@@ -1061,7 +1060,7 @@ func (as *authStore) AuthInfoFromCtx(ctx context.Context) (*AuthInfo, error) {
 		return nil, nil
 	}
 
-	//TODO(mitake|hexfusion) review unifying key names
+	// TODO(mitake|hexfusion) review unifying key names
 	ts, ok := md[rpctypes.TokenFieldNameGRPC]
 	if !ok {
 		ts, ok = md[rpctypes.TokenFieldNameSwagger]
@@ -1114,7 +1113,6 @@ func decomposeOpts(lg *zap.Logger, optstr string) (string, map[string]string, er
 	}
 
 	return tokenType, typeSpecificOpts, nil
-
 }
 
 // NewTokenProvider creates a new token provider.
@@ -1122,7 +1120,8 @@ func NewTokenProvider(
 	lg *zap.Logger,
 	tokenOpts string,
 	indexWaiter func(uint64) <-chan struct{},
-	TokenTTL time.Duration) (TokenProvider, error) {
+	TokenTTL time.Duration,
+) (TokenProvider, error) {
 	tokenType, typeSpecificOpts, err := decomposeOpts(lg, tokenOpts)
 	if err != nil {
 		return nil, ErrInvalidAuthOpts

@@ -22,9 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	ErrRevisionNotFound = errors.New("mvcc: revision not found")
-)
+var ErrRevisionNotFound = errors.New("mvcc: revision not found")
 
 // keyIndex stores the revisions of a key in the backend.
 // Each keyIndex has at least one key generation.
@@ -116,6 +114,15 @@ func (ki *keyIndex) restore(lg *zap.Logger, created, modified Revision, ver int6
 	g := generation{created: created, ver: ver, revs: []Revision{modified}}
 	ki.generations = append(ki.generations, g)
 	keysGauge.Inc()
+}
+
+// restoreTombstone is used to restore a tombstone revision, which is the only
+// revision so far for a key. We don't know the creating revision (i.e. already
+// compacted) of the key, so set it empty.
+func (ki *keyIndex) restoreTombstone(lg *zap.Logger, main, sub int64) {
+	ki.restore(lg, Revision{}, Revision{main, sub}, 1)
+	ki.generations = append(ki.generations, generation{})
+	keysGauge.Dec()
 }
 
 // tombstone puts a revision, pointing to a tombstone, to the keyIndex.

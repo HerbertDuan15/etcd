@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
@@ -31,10 +32,11 @@ import (
 )
 
 var (
-	DefaultLeaseTTL   int64 = 7200
-	RequestTimeout          = 200 * time.Millisecond
-	WatchTimeout            = time.Second
-	MultiOpTxnOpCount       = 4
+	DefaultLeaseTTL         int64 = 7200
+	RequestTimeout                = 200 * time.Millisecond
+	WatchTimeout                  = time.Second
+	MultiOpTxnOpCount             = 4
+	DefaultCompactionPeriod       = 200 * time.Millisecond
 
 	LowTraffic = Profile{
 		MinimalQPS:                     100,
@@ -43,7 +45,7 @@ var (
 		MaxNonUniqueRequestConcurrency: 3,
 	}
 	HighTrafficProfile = Profile{
-		MinimalQPS:                     200,
+		MinimalQPS:                     100,
 		MaximalQPS:                     1000,
 		ClientCount:                    8,
 		MaxNonUniqueRequestConcurrency: 3,
@@ -56,22 +58,15 @@ func SimulateTraffic(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2
 
 	lm := identity.NewLeaseIDStorage()
 	reports := []report.ClientReport{}
-	limiter := rate.NewLimiter(rate.Limit(profile.MaximalQPS), 200)
-
-	if profile.ForbidCompaction {
-		traffic = traffic.WithoutCompact()
-	}
+	// Use the highest MaximalQPS of all traffic profiles as burst otherwise actual traffic may be accidentally limited
+	limiter := rate.NewLimiter(rate.Limit(profile.MaximalQPS), 1000)
 
 	cc, err := client.NewRecordingClient(endpoints, ids, baseTime)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cc.Close()
 	// Ensure that first operation succeeds
 	_, err = cc.Put(ctx, "start", "true")
-	if err != nil {
-		t.Fatalf("First operation failed, validation requires first operation to succeed, err: %s", err)
-	}
+	require.NoErrorf(t, err, "First operation failed, validation requires first operation to succeed")
 	wg := sync.WaitGroup{}
 	nonUniqueWriteLimiter := NewConcurrencyLimiter(profile.MaxNonUniqueRequestConcurrency)
 	finish := make(chan struct{})
@@ -80,6 +75,20 @@ func SimulateTraffic(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2
 	for i := 0; i < profile.ClientCount; i++ {
 		wg.Add(1)
 		c, nerr := client.NewRecordingClient([]string{endpoints[i%len(endpoints)]}, ids, baseTime)
+		require.NoError(t, nerr)
+		go func(c *client.RecordingClient) {
+			defer wg.Done()
+			defer c.Close()
+
+			traffic.RunTrafficLoop(ctx, c, limiter, ids, lm, nonUniqueWriteLimiter, finish)
+			mux.Lock()
+			reports = append(reports, c.Report())
+			mux.Unlock()
+		}(c)
+	}
+	if !profile.ForbidCompaction {
+		wg.Add(1)
+		c, nerr := client.NewRecordingClient(endpoints, ids, baseTime)
 		if nerr != nil {
 			t.Fatal(nerr)
 		}
@@ -87,7 +96,12 @@ func SimulateTraffic(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2
 			defer wg.Done()
 			defer c.Close()
 
-			traffic.Run(ctx, c, limiter, ids, lm, nonUniqueWriteLimiter, finish)
+			compactionPeriod := DefaultCompactionPeriod
+			if profile.CompactPeriod != time.Duration(0) {
+				compactionPeriod = profile.CompactPeriod
+			}
+
+			traffic.RunCompactLoop(ctx, c, compactionPeriod, finish)
 			mux.Lock()
 			reports = append(reports, c.Report())
 			mux.Unlock()
@@ -96,9 +110,7 @@ func SimulateTraffic(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2
 	var fr *report.FailpointInjection
 	select {
 	case frp, ok := <-failpointInjected:
-		if !ok {
-			t.Fatalf("Failed to collect failpoint report")
-		}
+		require.Truef(t, ok, "Failed to collect failpoint report")
 		fr = &frp
 	case <-ctx.Done():
 		t.Fatalf("Traffic finished before failure was injected: %s", ctx.Err())
@@ -111,9 +123,7 @@ func SimulateTraffic(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2
 	time.Sleep(time.Second)
 	// Ensure that last operation succeeds
 	_, err = cc.Put(ctx, "tombstone", "true")
-	if err != nil {
-		t.Fatalf("Last operation failed, validation requires last operation to succeed, err: %s", err)
-	}
+	require.NoErrorf(t, err, "Last operation failed, validation requires last operation to succeed")
 	reports = append(reports, cc.Report())
 
 	totalStats := calculateStats(reports, startTime, endTime)
@@ -171,6 +181,7 @@ type Profile struct {
 	MaxNonUniqueRequestConcurrency int
 	ClientCount                    int
 	ForbidCompaction               bool
+	CompactPeriod                  time.Duration
 }
 
 func (p Profile) WithoutCompaction() Profile {
@@ -178,8 +189,13 @@ func (p Profile) WithoutCompaction() Profile {
 	return p
 }
 
+func (p Profile) WithCompactionPeriod(cp time.Duration) Profile {
+	p.CompactPeriod = cp
+	return p
+}
+
 type Traffic interface {
-	Run(ctx context.Context, c *client.RecordingClient, qpsLimiter *rate.Limiter, ids identity.Provider, lm identity.LeaseIDStorage, nonUniqueWriteLimiter ConcurrencyLimiter, finish <-chan struct{})
+	RunTrafficLoop(ctx context.Context, c *client.RecordingClient, qpsLimiter *rate.Limiter, ids identity.Provider, lm identity.LeaseIDStorage, nonUniqueWriteLimiter ConcurrencyLimiter, finish <-chan struct{})
+	RunCompactLoop(ctx context.Context, c *client.RecordingClient, period time.Duration, finish <-chan struct{})
 	ExpectUniqueRevision() bool
-	WithoutCompact() Traffic
 }

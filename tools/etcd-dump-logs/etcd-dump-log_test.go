@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
 	"go.etcd.io/etcd/api/v3/authpb"
@@ -36,9 +37,7 @@ import (
 func TestEtcdDumpLogEntryType(t *testing.T) {
 	// directory where the command is
 	binDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	// TODO(ptabor): The test does not run by default from ./scripts/test.sh.
 	dumpLogsBinary := path.Join(binDir + "/etcd-dump-logs")
@@ -79,13 +78,9 @@ func TestEtcdDumpLogEntryType(t *testing.T) {
 		t.Run(argtest.name, func(t *testing.T) {
 			cmd := exec.Command(dumpLogsBinary, argtest.args...)
 			actual, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			expected, err := os.ReadFile(path.Join(binDir, argtest.fileExpected))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 
 			assert.EqualValues(t, string(expected), string(actual))
 			// The output files contains a lot of trailing whitespaces... difficult to diagnose without printing them explicitly.
@@ -93,27 +88,20 @@ func TestEtcdDumpLogEntryType(t *testing.T) {
 			assert.EqualValues(t, strings.ReplaceAll(string(expected), " ", "_"), strings.ReplaceAll(string(actual), " ", "_"))
 		})
 	}
-
 }
 
 func mustCreateWALLog(t *testing.T, path string) {
 	memberdir := filepath.Join(path, "member")
-	err := os.Mkdir(memberdir, 0744)
-	if err != nil {
-		t.Fatal(err)
-	}
+	err := os.Mkdir(memberdir, 0o744)
+	require.NoError(t, err)
 	waldir := walDir(path)
 	snapdir := snapDir(path)
 
 	w, err := wal.Create(zaptest.NewLogger(t), waldir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	err = os.Mkdir(snapdir, 0744)
-	if err != nil {
-		t.Fatal(err)
-	}
+	err = os.Mkdir(snapdir, 0o744)
+	require.NoError(t, err)
 
 	ents := make([]raftpb.Entry, 0)
 
@@ -125,9 +113,7 @@ func mustCreateWALLog(t *testing.T, path string) {
 
 	// force commit newly appended entries
 	err = w.Save(raftpb.HardState{}, ents)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	w.Close()
 }
 
@@ -153,10 +139,10 @@ func appendNormalRequestEnts(ents *[]raftpb.Entry) {
 
 	requests := []etcdserverpb.Request{
 		{ID: 0, Method: "", Path: "/path0", Val: "{\"hey\":\"ho\",\"hi\":[\"yo\"]}", Dir: true, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 9, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
-		{ID: 1, Method: "QGET", Path: "/path1", Val: "{\"0\":\"1\",\"2\":[\"3\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 9, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
-		{ID: 2, Method: "SYNC", Path: "/path2", Val: "{\"0\":\"1\",\"2\":[\"3\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
-		{ID: 3, Method: "DELETE", Path: "/path3", Val: "{\"hey\":\"ho\",\"hi\":[\"yo\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &a, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
-		{ID: 4, Method: "RANDOM", Path: "/path4/superlong" + strings.Repeat("/path", 30), Val: "{\"hey\":\"ho\",\"hi\":[\"yo\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
+		{ID: 1, Method: methodQGet, Path: "/path1", Val: "{\"0\":\"1\",\"2\":[\"3\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 9, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
+		{ID: 2, Method: methodSync, Path: "/path2", Val: "{\"0\":\"1\",\"2\":[\"3\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
+		{ID: 3, Method: methodDelete, Path: "/path3", Val: "{\"hey\":\"ho\",\"hi\":[\"yo\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &a, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
+		{ID: 4, Method: methodRandom, Path: "/path4/superlong" + strings.Repeat("/path", 30), Val: "{\"hey\":\"ho\",\"hi\":[\"yo\"]}", Dir: false, PrevValue: "", PrevIndex: 0, PrevExist: &b, Expiration: 2, Wait: false, Since: 1, Recursive: false, Sorted: false, Quorum: false, Time: 1, Stream: false, Refresh: &b},
 	}
 
 	for i, request := range requests {
@@ -176,11 +162,12 @@ func appendNormalIRREnts(ents *[]raftpb.Entry) {
 
 	irrdeleterange := &etcdserverpb.DeleteRangeRequest{Key: []byte("0"), RangeEnd: []byte("9"), PrevKv: true}
 
-	delInRangeReq := &etcdserverpb.RequestOp{Request: &etcdserverpb.RequestOp_RequestDeleteRange{
-		RequestDeleteRange: &etcdserverpb.DeleteRangeRequest{
-			Key: []byte("a"), RangeEnd: []byte("b"),
+	delInRangeReq := &etcdserverpb.RequestOp{
+		Request: &etcdserverpb.RequestOp_RequestDeleteRange{
+			RequestDeleteRange: &etcdserverpb.DeleteRangeRequest{
+				Key: []byte("a"), RangeEnd: []byte("b"),
+			},
 		},
-	},
 	}
 
 	irrtxn := &etcdserverpb.TxnRequest{Success: []*etcdserverpb.RequestOp{delInRangeReq}, Failure: []*etcdserverpb.RequestOp{delInRangeReq}}

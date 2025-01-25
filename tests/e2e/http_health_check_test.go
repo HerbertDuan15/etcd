@@ -172,33 +172,31 @@ func TestHTTPHealthHandler(t *testing.T) {
 	}
 }
 
-var (
-	defaultHealthCheckConfigs = []healthCheckConfig{
-		{
-			url:                    "/livez",
-			expectedStatusCode:     http.StatusOK,
-			expectedRespSubStrings: []string{`ok`},
+var defaultHealthCheckConfigs = []healthCheckConfig{
+	{
+		url:                    "/livez",
+		expectedStatusCode:     http.StatusOK,
+		expectedRespSubStrings: []string{`ok`},
+	},
+	{
+		url:                    "/readyz",
+		expectedStatusCode:     http.StatusOK,
+		expectedRespSubStrings: []string{`ok`},
+	},
+	{
+		url:                    "/livez?verbose=true",
+		expectedStatusCode:     http.StatusOK,
+		expectedRespSubStrings: []string{`[+]serializable_read ok`},
+	},
+	{
+		url:                "/readyz?verbose=true",
+		expectedStatusCode: http.StatusOK,
+		expectedRespSubStrings: []string{
+			`[+]serializable_read ok`,
+			`[+]data_corruption ok`,
 		},
-		{
-			url:                    "/readyz",
-			expectedStatusCode:     http.StatusOK,
-			expectedRespSubStrings: []string{`ok`},
-		},
-		{
-			url:                    "/livez?verbose=true",
-			expectedStatusCode:     http.StatusOK,
-			expectedRespSubStrings: []string{`[+]serializable_read ok`},
-		},
-		{
-			url:                "/readyz?verbose=true",
-			expectedStatusCode: http.StatusOK,
-			expectedRespSubStrings: []string{
-				`[+]serializable_read ok`,
-				`[+]data_corruption ok`,
-			},
-		},
-	}
-)
+	},
+}
 
 func TestHTTPLivezReadyzHandler(t *testing.T) {
 	e2e.BeforeTest(t)
@@ -339,7 +337,7 @@ func TestHTTPLivezReadyzHandler(t *testing.T) {
 
 func doHealthCheckAndVerify(t *testing.T, client *http.Client, url string, expectTimeoutError bool, expectStatusCode int, expectRespSubStrings []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), healthCheckTimeout)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	require.NoErrorf(t, err, "failed to creat request %+v", err)
 	resp, herr := client.Do(req)
 	cancel()
@@ -367,9 +365,7 @@ func triggerNoSpaceAlarm(ctx context.Context, t *testing.T, clus *e2e.EtcdProces
 	etcdctl := clus.Etcdctl()
 	for {
 		if err := etcdctl.Put(ctx, "foo", buf, config.PutOptions{}); err != nil {
-			if !strings.Contains(err.Error(), "etcdserver: mvcc: database space exceeded") {
-				t.Fatal(err)
-			}
+			require.ErrorContains(t, err, "etcdserver: mvcc: database space exceeded")
 			break
 		}
 	}

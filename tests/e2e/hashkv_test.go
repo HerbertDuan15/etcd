@@ -145,8 +145,8 @@ func TestVerifyHashKVAfterCompactionOnLastTombstone_MixVersions(t *testing.T) {
 	}
 
 	for _, keys := range [][]string{
-		[]string{"key0"},
-		[]string{"key0", "key1"},
+		{"key0"},
+		{"key0", "key1"},
 	} {
 		t.Run(fmt.Sprintf("#%v", keys), func(t *testing.T) {
 			ctx := context.Background()
@@ -172,7 +172,6 @@ func TestVerifyHashKVAfterCompactionOnLastTombstone_MixVersions(t *testing.T) {
 			for rev := compactOnRev; rev <= lastestRev; rev++ {
 				verifyConsistentHashKVAcrossAllMembers(t, cli, rev)
 			}
-
 		})
 	}
 }
@@ -226,7 +225,7 @@ func verifyConsistentHashKVAcrossAllMembers(t *testing.T, cli *e2e.EtcdctlV3, ha
 	require.NoError(t, err)
 
 	require.Greater(t, len(resp), 1)
-	require.True(t, resp[0].Hash != 0)
+	require.NotEqual(t, 0, resp[0].Hash)
 	t.Logf("One Hash value is %d", resp[0].Hash)
 
 	for i := 1; i < len(resp); i++ {

@@ -56,6 +56,21 @@ var (
 		"test.coverprofile",
 		"test.outputdir",
 	}
+
+	deprecatedFlags = map[string]string{
+		// TODO: remove in 3.7.
+		"snapshot-count": "--snapshot-count is deprecated in 3.6 and will be decommissioned in 3.7.",
+		"max-snapshots":  "--max-snapshots is deprecated in 3.6 and will be decommissioned in 3.7.",
+		"v2-deprecation": "--v2-deprecation is deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.",
+		"experimental-compact-hash-check-enabled":           "--experimental-compact-hash-check-enabled is deprecated in 3.6 and will be decommissioned in 3.7. Use '--feature-gates=CompactHashCheck=true' instead.",
+		"experimental-compact-hash-check-time":              "--experimental-compact-hash-check-time is deprecated in 3.6 and will be decommissioned in 3.7. Use '--compact-hash-check-time' instead.",
+		"experimental-txn-mode-write-with-shared-buffer":    "--experimental-txn-mode-write-with-shared-buffer is deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=TxnModeWriteWithSharedBuffer=true' instead.",
+		"experimental-corrupt-check-time":                   "--experimental-corrupt-check-time is deprecated in v3.6 and will be decommissioned in v3.7. Use '--corrupt-check-time' instead.",
+		"experimental-compaction-batch-limit":               "--experimental-compaction-batch-limit is deprecated in v3.6 and will be decommissioned in v3.7. Use '--compaction-batch-limit' instead.",
+		"experimental-watch-progress-notify-interval":       "--experimental-watch-progress-notify-interval is deprecated in v3.6 and will be decommissioned in v3.7. Use '--watch-progress-notify-interval' instead.",
+		"experimental-warning-apply-duration":               "--experimental-warning-apply-duration is deprecated in v3.6 and will be decommissioned in v3.7. Use '--warning-apply-duration' instead.",
+		"experimental-bootstrap-defrag-threshold-megabytes": "--experimental-bootstrap-defrag-threshold-megabytes is deprecated in v3.6 and will be decommissioned in v3.7. Use '--bootstrap-defrag-threshold-megabytes' instead.",
+	}
 )
 
 // config holds the config for a command line invocation of etcd
@@ -69,9 +84,11 @@ type config struct {
 
 // configFlags has the set of flags used for command line parsing a Config
 type configFlags struct {
-	flagSet       *flag.FlagSet
-	clusterState  *flags.SelectiveStringValue
-	fallback      *flags.SelectiveStringValue
+	flagSet      *flag.FlagSet
+	clusterState *flags.SelectiveStringValue
+	fallback     *flags.SelectiveStringValue
+	// Deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.
+	// TODO: remove in v3.8.
 	v2deprecation *flags.SelectiveStringsValue
 }
 
@@ -103,7 +120,7 @@ func newConfig() *config {
 	fs.StringVar(&cfg.configFile, "config-file", "", "Path to the server configuration file. Note that if a configuration file is provided, other command line flags and environment variables will be ignored.")
 	fs.Var(cfg.cf.fallback, "discovery-fallback", fmt.Sprintf("Valid values include %q", cfg.cf.fallback.Valids()))
 	fs.Var(cfg.cf.clusterState, "initial-cluster-state", "Initial cluster state ('new' when bootstrapping a new cluster or 'existing' when adding new members to an existing cluster). After successful initialization (bootstrapping or adding), flag is ignored on restarts.")
-	fs.Var(cfg.cf.v2deprecation, "v2-deprecation", fmt.Sprintf("v2store deprecation stage: %q. ", cfg.cf.v2deprecation.Valids()))
+	fs.Var(cfg.cf.v2deprecation, "v2-deprecation", fmt.Sprintf("v2store deprecation stage: %q. Deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.", cfg.cf.v2deprecation.Valids()))
 
 	fs.BoolVar(&cfg.printVersion, "version", false, "Print the version and exit.")
 	// ignored
@@ -115,9 +132,9 @@ func newConfig() *config {
 
 func (cfg *config) parse(arguments []string) error {
 	perr := cfg.cf.flagSet.Parse(arguments)
-	switch perr {
-	case nil:
-	case flag.ErrHelp:
+	switch {
+	case perr == nil:
+	case errors.Is(perr, flag.ErrHelp):
 		fmt.Println(flagsline)
 		os.Exit(0)
 	default:
@@ -156,16 +173,57 @@ func (cfg *config) parse(arguments []string) error {
 		err = cfg.configFromCmdLine()
 	}
 
-	if cfg.ec.V2Deprecation == "" {
-		cfg.ec.V2Deprecation = cconfig.V2DeprDefault
+	// params related to experimental flag deprecation
+	// TODO: delete in v3.7
+	if cfg.ec.FlagsExplicitlySet["experimental-compact-hash-check-time"] {
+		cfg.ec.CompactHashCheckTime = cfg.ec.ExperimentalCompactHashCheckTime
 	}
+
+	if cfg.ec.FlagsExplicitlySet["experimental-corrupt-check-time"] {
+		cfg.ec.CorruptCheckTime = cfg.ec.ExperimentalCorruptCheckTime
+	}
+
+	if cfg.ec.FlagsExplicitlySet["experimental-compaction-batch-limit"] {
+		cfg.ec.CompactionBatchLimit = cfg.ec.ExperimentalCompactionBatchLimit
+	}
+
+	if cfg.ec.FlagsExplicitlySet["experimental-watch-progress-notify-interval"] {
+		cfg.ec.WatchProgressNotifyInterval = cfg.ec.ExperimentalWatchProgressNotifyInterval
+	}
+
+	if cfg.ec.FlagsExplicitlySet["experimental-warning-apply-duration"] {
+		cfg.ec.WarningApplyDuration = cfg.ec.ExperimentalWarningApplyDuration
+	}
+
+	if cfg.ec.FlagsExplicitlySet["experimental-bootstrap-defrag-threshold-megabytes"] {
+		cfg.ec.BootstrapDefragThresholdMegabytes = cfg.ec.ExperimentalBootstrapDefragThresholdMegabytes
+	}
+
+	// `V2Deprecation` (--v2-deprecation) is deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.
+	cfg.ec.V2Deprecation = cconfig.V2DeprDefault
 
 	cfg.ec.WarningUnaryRequestDuration, perr = cfg.parseWarningUnaryRequestDuration()
 	if perr != nil {
 		return perr
 	}
 
-	// now logger is set up
+	// Check for deprecated options from both command line and config file
+	var warningsForDeprecatedOpts []string
+	for flagName := range cfg.ec.FlagsExplicitlySet {
+		if msg, ok := deprecatedFlags[flagName]; ok {
+			warningsForDeprecatedOpts = append(warningsForDeprecatedOpts, msg)
+		}
+	}
+
+	// Log warnings if any deprecated options were found
+	if len(warningsForDeprecatedOpts) > 0 {
+		if lg := cfg.ec.GetLogger(); lg != nil {
+			for _, msg := range warningsForDeprecatedOpts {
+				lg.Warn(msg)
+			}
+		}
+	}
+
 	return err
 }
 
@@ -237,6 +295,10 @@ func (cfg *config) configFromCmdLine() error {
 	if (cfg.ec.Durl != "" || cfg.ec.DNSCluster != "" || cfg.ec.DNSClusterServiceName != "" || len(cfg.ec.DiscoveryCfg.Endpoints) > 0) && !flags.IsSet(cfg.cf.flagSet, "initial-cluster") {
 		cfg.ec.InitialCluster = ""
 	}
+
+	cfg.cf.flagSet.Visit(func(f *flag.Flag) {
+		cfg.ec.FlagsExplicitlySet[f.Name] = true
+	})
 
 	getBoolFlagVal := func(flagName string) *bool {
 		boolVal, parseErr := flags.GetBoolFlagVal(cfg.cf.flagSet, flagName)

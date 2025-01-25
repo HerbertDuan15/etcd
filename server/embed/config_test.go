@@ -17,6 +17,7 @@ package embed
 import (
 	"crypto/tls"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/url"
@@ -25,11 +26,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
 	"go.etcd.io/etcd/client/pkg/v3/srv"
+	"go.etcd.io/etcd/client/pkg/v3/tlsutil"
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	"go.etcd.io/etcd/client/pkg/v3/types"
 	"go.etcd.io/etcd/pkg/v3/featuregate"
@@ -85,33 +89,50 @@ func TestConfigFileOtherFields(t *testing.T) {
 		t.Errorf("PeerTLS = %v, want %v", cfg.PeerTLSInfo, ptls)
 	}
 
-	assert.Equal(t, true, cfg.ForceNewCluster, "ForceNewCluster does not match")
+	assert.Truef(t, cfg.ForceNewCluster, "ForceNewCluster does not match")
 
-	assert.Equal(t, true, cfg.SocketOpts.ReusePort, "ReusePort does not match")
+	assert.Truef(t, cfg.SocketOpts.ReusePort, "ReusePort does not match")
 
-	assert.Equal(t, false, cfg.SocketOpts.ReuseAddress, "ReuseAddress does not match")
+	assert.Falsef(t, cfg.SocketOpts.ReuseAddress, "ReuseAddress does not match")
 }
 
 func TestConfigFileFeatureGates(t *testing.T) {
 	testCases := []struct {
-		name                                string
-		serverFeatureGatesJSON              string
-		experimentalStopGRPCServiceOnDefrag string
-		expectErr                           bool
-		expectedFeatures                    map[featuregate.Feature]bool
+		name                                     string
+		serverFeatureGatesJSON                   string
+		experimentalStopGRPCServiceOnDefrag      string
+		experimentalInitialCorruptCheck          string
+		experimentalCompactHashCheckEnabled      string
+		experimentalTxnModeWriteWithSharedBuffer string
+		expectErr                                bool
+		expectedFeatures                         map[featuregate.Feature]bool
 	}{
 		{
 			name: "default",
 			expectedFeatures: map[featuregate.Feature]bool{
-				features.DistributedTracing:      false,
-				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:           false,
+				features.StopGRPCServiceOnDefrag:      false,
+				features.InitialCorruptCheck:          false,
+				features.TxnModeWriteWithSharedBuffer: true,
 			},
 		},
 		{
-			name:                                "cannot set both experimental flag and feature gate flag",
+			name:                                "cannot set both experimental flag and feature gate flag for StopGRPCServiceOnDefrag",
 			serverFeatureGatesJSON:              "StopGRPCServiceOnDefrag=true",
 			experimentalStopGRPCServiceOnDefrag: "false",
 			expectErr:                           true,
+		},
+		{
+			name:                            "cannot set both experimental flag and feature gate flag for InitialCorruptCheck",
+			serverFeatureGatesJSON:          "InitialCorruptCheck=true",
+			experimentalInitialCorruptCheck: "false",
+			expectErr:                       true,
+		},
+		{
+			name:                                     "cannot set both experimental flag and feature gate flag for TxnModeWriteWithSharedBuffer",
+			serverFeatureGatesJSON:                   "TxnModeWriteWithSharedBuffer=true",
+			experimentalTxnModeWriteWithSharedBuffer: "false",
+			expectErr:                                true,
 		},
 		{
 			name:                                "ok to set different experimental flag and feature gate flag",
@@ -120,48 +141,188 @@ func TestConfigFileFeatureGates(t *testing.T) {
 			expectedFeatures: map[featuregate.Feature]bool{
 				features.DistributedTracing:      true,
 				features.StopGRPCServiceOnDefrag: true,
+				features.InitialCorruptCheck:     false,
 			},
 		},
 		{
-			name:                                "can set feature gate to true from experimental flag",
+			name:                                "ok to set different multiple experimental flags and feature gate flags",
+			serverFeatureGatesJSON:              "StopGRPCServiceOnDefrag=true,TxnModeWriteWithSharedBuffer=true",
+			experimentalCompactHashCheckEnabled: "true",
+			experimentalInitialCorruptCheck:     "true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      true,
+				features.CompactHashCheck:             true,
+				features.InitialCorruptCheck:          true,
+				features.TxnModeWriteWithSharedBuffer: true,
+			},
+		},
+		{
+			name:                                "can set feature gate StopGRPCServiceOnDefrag to true from experimental flag",
 			experimentalStopGRPCServiceOnDefrag: "true",
 			expectedFeatures: map[featuregate.Feature]bool{
-				features.StopGRPCServiceOnDefrag: true,
-				features.DistributedTracing:      false,
+				features.StopGRPCServiceOnDefrag:      true,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.TxnModeWriteWithSharedBuffer: true,
 			},
 		},
 		{
-			name:                                "can set feature gate to false from experimental flag",
+			name:                                "can set feature gate StopGRPCServiceOnDefrag to false from experimental flag",
 			experimentalStopGRPCServiceOnDefrag: "false",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      false,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.TxnModeWriteWithSharedBuffer: true,
+			},
+		},
+		{
+			name:                            "can set feature gate experimentalInitialCorruptCheck to true from experimental flag",
+			experimentalInitialCorruptCheck: "true",
 			expectedFeatures: map[featuregate.Feature]bool{
 				features.StopGRPCServiceOnDefrag: false,
 				features.DistributedTracing:      false,
+				features.InitialCorruptCheck:     true,
 			},
 		},
 		{
-			name:                   "can set feature gate to true from feature gate flag",
+			name:                            "can set feature gate experimentalInitialCorruptCheck to false from experimental flag",
+			experimentalInitialCorruptCheck: "false",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:      false,
+				features.InitialCorruptCheck:     false,
+			},
+		},
+		{
+			name:                                     "can set feature gate TxnModeWriteWithSharedBuffer to true from experimental flag",
+			experimentalTxnModeWriteWithSharedBuffer: "true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      false,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.CompactHashCheck:             false,
+				features.TxnModeWriteWithSharedBuffer: true,
+			},
+		},
+		{
+			name:                                     "can set feature gate TxnModeWriteWithSharedBuffer to false from experimental flag",
+			experimentalTxnModeWriteWithSharedBuffer: "false",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      false,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.CompactHashCheck:             false,
+				features.TxnModeWriteWithSharedBuffer: false,
+			},
+		},
+		{
+			name:                   "can set feature gate StopGRPCServiceOnDefrag to true from feature gate flag",
 			serverFeatureGatesJSON: "StopGRPCServiceOnDefrag=true",
 			expectedFeatures: map[featuregate.Feature]bool{
 				features.StopGRPCServiceOnDefrag: true,
 				features.DistributedTracing:      false,
+				features.InitialCorruptCheck:     false,
 			},
 		},
 		{
-			name:                   "can set feature gate to false from feature gate flag",
+			name:                   "can set feature gate InitialCorruptCheck to true from feature gate flag",
+			serverFeatureGatesJSON: "InitialCorruptCheck=true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:      false,
+				features.InitialCorruptCheck:     true,
+			},
+		},
+		{
+			name:                   "can set feature gate StopGRPCServiceOnDefrag to false from feature gate flag",
 			serverFeatureGatesJSON: "StopGRPCServiceOnDefrag=false",
 			expectedFeatures: map[featuregate.Feature]bool{
 				features.StopGRPCServiceOnDefrag: false,
 				features.DistributedTracing:      false,
+				features.InitialCorruptCheck:     false,
+			},
+		},
+		{
+			name:                   "can set feature gate TxnModeWriteWithSharedBuffer to true from feature gate flag",
+			serverFeatureGatesJSON: "TxnModeWriteWithSharedBuffer=true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      false,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.TxnModeWriteWithSharedBuffer: true,
+			},
+		},
+		{
+			name:                   "can set feature gate TxnModeWriteWithSharedBuffer to false from feature gate flag",
+			serverFeatureGatesJSON: "TxnModeWriteWithSharedBuffer=false",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag:      false,
+				features.DistributedTracing:           false,
+				features.InitialCorruptCheck:          false,
+				features.TxnModeWriteWithSharedBuffer: false,
+			},
+		},
+		{
+			name:                                "cannot set both experimental flag and feature gate flag for ExperimentalCompactHashCheckEnabled",
+			serverFeatureGatesJSON:              "CompactHashCheck=true",
+			experimentalCompactHashCheckEnabled: "false",
+			expectErr:                           true,
+		},
+		{
+			name:                                "can set feature gate experimentalCompactHashCheckEnabled to true from experimental flag",
+			experimentalCompactHashCheckEnabled: "true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:      false,
+				features.CompactHashCheck:        true,
+			},
+		},
+		{
+			name:                                "can set feature gate experimentalCompactHashCheckEnabled to false from experimental flag",
+			experimentalCompactHashCheckEnabled: "false",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:      false,
+				features.CompactHashCheck:        false,
+			},
+		},
+		{
+			name:                   "can set feature gate CompactHashCheck to true from feature gate flag",
+			serverFeatureGatesJSON: "CompactHashCheck=true",
+			expectedFeatures: map[featuregate.Feature]bool{
+				features.StopGRPCServiceOnDefrag: false,
+				features.DistributedTracing:      false,
+				features.CompactHashCheck:        true,
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			yc := struct {
-				ExperimentalStopGRPCServiceOnDefrag *bool  `json:"experimental-stop-grpc-service-on-defrag,omitempty"`
-				ServerFeatureGatesJSON              string `json:"feature-gates"`
+				ExperimentalStopGRPCServiceOnDefrag      *bool  `json:"experimental-stop-grpc-service-on-defrag,omitempty"`
+				ExperimentalInitialCorruptCheck          *bool  `json:"experimental-initial-corrupt-check,omitempty"`
+				ExperimentalCompactHashCheckEnabled      *bool  `json:"experimental-compact-hash-check-enabled,omitempty"`
+				ExperimentalTxnModeWriteWithSharedBuffer *bool  `json:"experimental-txn-mode-write-with-shared-buffer,omitempty"`
+				ServerFeatureGatesJSON                   string `json:"feature-gates"`
 			}{
 				ServerFeatureGatesJSON: tc.serverFeatureGatesJSON,
+			}
+
+			if tc.experimentalInitialCorruptCheck != "" {
+				experimentalInitialCorruptCheck, err := strconv.ParseBool(tc.experimentalInitialCorruptCheck)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.ExperimentalInitialCorruptCheck = &experimentalInitialCorruptCheck
+			}
+
+			if tc.experimentalTxnModeWriteWithSharedBuffer != "" {
+				experimentalTxnModeWriteWithSharedBuffer, err := strconv.ParseBool(tc.experimentalTxnModeWriteWithSharedBuffer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.ExperimentalTxnModeWriteWithSharedBuffer = &experimentalTxnModeWriteWithSharedBuffer
 			}
 
 			if tc.experimentalStopGRPCServiceOnDefrag != "" {
@@ -171,6 +332,15 @@ func TestConfigFileFeatureGates(t *testing.T) {
 				}
 				yc.ExperimentalStopGRPCServiceOnDefrag = &experimentalStopGRPCServiceOnDefrag
 			}
+
+			if tc.experimentalCompactHashCheckEnabled != "" {
+				experimentalCompactHashCheckEnabled, err := strconv.ParseBool(tc.experimentalCompactHashCheckEnabled)
+				if err != nil {
+					t.Fatal(err)
+				}
+				yc.ExperimentalCompactHashCheckEnabled = &experimentalCompactHashCheckEnabled
+			}
+
 			b, err := yaml.Marshal(&yc)
 			if err != nil {
 				t.Fatal(err)
@@ -391,7 +561,6 @@ func TestInferLocalAddr(t *testing.T) {
 			require.Equal(t, tt.expectedLocalAddr, cfg.InferLocalAddr())
 		})
 	}
-
 }
 
 func (s *securityConfig) equals(t *transport.TLSInfo) bool {
@@ -757,7 +926,7 @@ func TestTLSVersionMinMax(t *testing.T) {
 
 			err := cfg.Validate()
 			if err != nil {
-				assert.True(t, tt.expectError, "Validate() returned error while expecting success: %v", err)
+				assert.Truef(t, tt.expectError, "Validate() returned error while expecting success: %v", err)
 				return
 			}
 
@@ -874,5 +1043,29 @@ func TestSetFeatureGatesFromExperimentalFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMatchNewConfigAddFlags(t *testing.T) {
+	cfg := NewConfig()
+	fs := flag.NewFlagSet("etcd", flag.ContinueOnError)
+	cfg.AddFlags(fs)
+	require.NoError(t, fs.Parse(nil))
+
+	newConfig := NewConfig()
+	// TODO: Remove the following assigments when both match.
+	newConfig.SelfSignedCertValidity = 1
+	newConfig.TlsMinVersion = string(tlsutil.TLSVersion12)
+	newConfig.DiscoveryCfg.Secure.InsecureTransport = true
+	newConfig.AutoCompactionRetention = "0"
+	newConfig.ExperimentalDistributedTracingAddress = "localhost:4317"
+	newConfig.ExperimentalDistributedTracingServiceName = "etcd"
+	newConfig.LogFormat = "json"
+	newConfig.ExperimentalTxnModeWriteWithSharedBuffer = true
+	// TODO: Reduce number of unexported fields set in config
+	if diff := cmp.Diff(newConfig, cfg, cmpopts.IgnoreUnexported(transport.TLSInfo{}, Config{}), cmp.Comparer(func(a, b featuregate.FeatureGate) bool {
+		return a.String() == b.String()
+	})); diff != "" {
+		t.Errorf("Diff: %s", diff)
 	}
 }

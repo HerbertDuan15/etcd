@@ -249,7 +249,9 @@ func TestV3LeaseExpire(t *testing.T) {
 
 		wreq := &pb.WatchRequest{RequestUnion: &pb.WatchRequest_CreateRequest{
 			CreateRequest: &pb.WatchCreateRequest{
-				Key: []byte("foo"), StartRevision: 1}}}
+				Key: []byte("foo"), StartRevision: 1,
+			},
+		}}
 		if err := wStream.Send(wreq); err != nil {
 			return err
 		}
@@ -543,9 +545,8 @@ func testLeaseStress(t *testing.T, stresser func(context.Context, pb.LeaseClient
 	}
 
 	for i := 0; i < 300; i++ {
-		if err := <-errc; err != nil {
-			t.Fatal(err)
-		}
+		err := <-errc
+		require.NoError(t, err)
 	}
 }
 
@@ -591,7 +592,7 @@ func stressLeaseTimeToLive(tctx context.Context, lc pb.LeaseClient) (reterr erro
 			continue
 		}
 		_, kerr := lc.LeaseTimeToLive(tctx, &pb.LeaseTimeToLiveRequest{ID: resp.ID})
-		if rpctypes.Error(kerr) == rpctypes.ErrLeaseNotFound {
+		if errors.Is(rpctypes.Error(kerr), rpctypes.ErrLeaseNotFound) {
 			return kerr
 		}
 	}
@@ -640,9 +641,8 @@ func TestV3GetNonExistLease(t *testing.T) {
 
 	for _, m := range clus.Members {
 		// quorum-read to ensure revoke completes before TimeToLive
-		if _, err := integration.ToGRPC(m.Client).KV.Range(ctx, &pb.RangeRequest{Key: []byte("_")}); err != nil {
-			t.Fatal(err)
-		}
+		_, err := integration.ToGRPC(m.Client).KV.Range(ctx, &pb.RangeRequest{Key: []byte("_")})
+		require.NoError(t, err)
 		resp, err := integration.ToGRPC(m.Client).Lease.LeaseTimeToLive(ctx, leaseTTLr)
 		if err != nil {
 			t.Fatalf("expected non nil error, but go %v", err)
@@ -1086,7 +1086,7 @@ func testV3LeaseTimeToLiveWithLeaderChanged(t *testing.T, fpName string) {
 	require.NoError(t, gofail.Enable(fpName, `sleep("3s")`))
 	t.Cleanup(func() {
 		terr := gofail.Disable(fpName)
-		if terr != nil && terr != gofail.ErrDisabled {
+		if terr != nil && !errors.Is(terr, gofail.ErrDisabled) {
 			t.Fatalf("failed to disable %s: %v", fpName, terr)
 		}
 	})

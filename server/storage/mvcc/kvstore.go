@@ -38,9 +38,11 @@ var (
 	ErrFutureRev = errors.New("mvcc: required revision is a future revision")
 )
 
-var restoreChunkKeys = 10000 // non-const for testing
-var defaultCompactBatchLimit = 1000
-var minimumBatchInterval = 10 * time.Millisecond
+var (
+	restoreChunkKeys               = 10000 // non-const for testing
+	defaultCompactionBatchLimit    = 1000
+	defaultCompactionSleepInterval = 10 * time.Millisecond
+)
 
 type StoreConfig struct {
 	CompactionBatchLimit    int
@@ -85,10 +87,10 @@ func NewStore(lg *zap.Logger, b backend.Backend, le lease.Lessor, cfg StoreConfi
 		lg = zap.NewNop()
 	}
 	if cfg.CompactionBatchLimit == 0 {
-		cfg.CompactionBatchLimit = defaultCompactBatchLimit
+		cfg.CompactionBatchLimit = defaultCompactionBatchLimit
 	}
 	if cfg.CompactionSleepInterval == 0 {
-		cfg.CompactionSleepInterval = minimumBatchInterval
+		cfg.CompactionSleepInterval = defaultCompactionSleepInterval
 	}
 	s := &store{
 		cfg:     cfg,
@@ -471,8 +473,12 @@ func restoreIntoIndex(lg *zap.Logger, idx index) (chan<- revKeyValue, <-chan int
 					continue
 				}
 				ki.put(lg, rev.Main, rev.Sub)
-			} else if !isTombstone(rkv.key) {
-				ki.restore(lg, Revision{Main: rkv.kv.CreateRevision}, rev, rkv.kv.Version)
+			} else {
+				if isTombstone(rkv.key) {
+					ki.restoreTombstone(lg, rev.Main, rev.Sub)
+				} else {
+					ki.restore(lg, Revision{Main: rkv.kv.CreateRevision}, rev, rkv.kv.Version)
+				}
 				idx.Insert(ki)
 				kiCache[rkv.kstr] = ki
 			}
