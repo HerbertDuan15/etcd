@@ -34,6 +34,10 @@ import (
 	"go.etcd.io/etcd/server/v3/storage/datadir"
 )
 
+const (
+	grpcOverheadBytes = 512 * 1024
+)
+
 // ServerConfig holds the configuration of etcd as taken from the command line or discovery.
 type ServerConfig struct {
 	Name string
@@ -143,10 +147,9 @@ type ServerConfig struct {
 
 	// InitialCorruptCheck is true to check data corruption on boot
 	// before serving any peer/client traffic.
-	InitialCorruptCheck     bool
-	CorruptCheckTime        time.Duration
-	CompactHashCheckEnabled bool
-	CompactHashCheckTime    time.Duration
+	InitialCorruptCheck  bool
+	CorruptCheckTime     time.Duration
+	CompactHashCheckTime time.Duration
 
 	// PreVote is true to enable Raft Pre-Vote.
 	PreVote bool
@@ -159,19 +162,15 @@ type ServerConfig struct {
 
 	ForceNewCluster bool
 
-	// EnableLeaseCheckpoint enables leader to send regular checkpoints to other members to prevent reset of remaining TTL on leader change.
-	EnableLeaseCheckpoint bool
 	// LeaseCheckpointInterval time.Duration is the wait duration between lease checkpoints.
 	LeaseCheckpointInterval time.Duration
-	// LeaseCheckpointPersist enables persisting remainingTTL to prevent indefinite auto-renewal of long lived leases. Always enabled in v3.6. Should be used to ensure smooth upgrade from v3.5 clusters with this feature enabled.
-	LeaseCheckpointPersist bool
 
 	EnableGRPCGateway bool
 
-	// ExperimentalEnableDistributedTracing enables distributed tracing using OpenTelemetry protocol.
-	ExperimentalEnableDistributedTracing bool
-	// ExperimentalTracerOptions are options for OpenTelemetry gRPC interceptor.
-	ExperimentalTracerOptions []otelgrpc.Option
+	// EnableDistributedTracing enables distributed tracing using OpenTelemetry protocol.
+	EnableDistributedTracing bool
+	// TracerOptions are options for OpenTelemetry gRPC interceptor.
+	TracerOptions []otelgrpc.Option
 
 	WatchProgressNotifyInterval time.Duration
 
@@ -181,24 +180,26 @@ type ServerConfig struct {
 
 	DowngradeCheckTime time.Duration
 
-	// ExperimentalMemoryMlock enables mlocking of etcd owned memory pages.
+	// MemoryMlock enables mlocking of etcd owned memory pages.
 	// The setting improves etcd tail latency in environments were:
 	//   - memory pressure might lead to swapping pages to disk
 	//   - disk latency might be unstable
 	// Currently all etcd memory gets mlocked, but in future the flag can
 	// be refined to mlock in-use area of bbolt only.
-	ExperimentalMemoryMlock bool `json:"experimental-memory-mlock"`
+	MemoryMlock bool `json:"memory-mlock"`
 
 	// ExperimentalTxnModeWriteWithSharedBuffer enable write transaction to use
 	// a shared buffer in its readonly check operations.
+	// TODO: Delete in v3.7
+	// Deprecated: Use TxnModeWriteWithSharedBuffer Feature Gate instead. Will be decommissioned in v3.7.
 	ExperimentalTxnModeWriteWithSharedBuffer bool `json:"experimental-txn-mode-write-with-shared-buffer"`
 
-	// ExperimentalBootstrapDefragThresholdMegabytes is the minimum number of megabytes needed to be freed for etcd server to
+	// BootstrapDefragThresholdMegabytes is the minimum number of megabytes needed to be freed for etcd server to
 	// consider running defrag during bootstrap. Needs to be set to non-zero value to take effect.
-	ExperimentalBootstrapDefragThresholdMegabytes uint `json:"experimental-bootstrap-defrag-threshold-megabytes"`
+	BootstrapDefragThresholdMegabytes uint `json:"bootstrap-defrag-threshold-megabytes"`
 
-	// ExperimentalMaxLearners sets a limit to the number of learner members that can exist in the cluster membership.
-	ExperimentalMaxLearners int `json:"experimental-max-learners"`
+	// MaxLearners sets a limit to the number of learner members that can exist in the cluster membership.
+	MaxLearners int `json:"max-learners"`
 
 	// V2Deprecation defines a phase of v2store deprecation process.
 	V2Deprecation V2DeprecationEnum `json:"v2-deprecation"`
@@ -208,6 +209,9 @@ type ServerConfig struct {
 
 	// ServerFeatureGate is a server level feature gate
 	ServerFeatureGate featuregate.FeatureGate
+
+	// Metrics types of metrics - should be either 'basic' or 'extensive'
+	Metrics string
 }
 
 // VerifyBootstrap sanity-checks the initial config for bootstrap case
@@ -285,7 +289,7 @@ func (c *ServerConfig) advertiseMatchesCluster() error {
 		}
 		mstr := strings.Join(missing, ",")
 		apStr := strings.Join(apurls, ",")
-		return fmt.Errorf("--initial-cluster has %s but missing from --initial-advertise-peer-urls=%s (%v)", mstr, apStr, err)
+		return fmt.Errorf("--initial-cluster has %s but missing from --initial-advertise-peer-urls=%s (%w)", mstr, apStr, err)
 	}
 
 	for url := range apMap {
@@ -302,7 +306,7 @@ func (c *ServerConfig) advertiseMatchesCluster() error {
 	// resolved URLs from "--initial-advertise-peer-urls" and "--initial-cluster" did not match or failed
 	apStr := strings.Join(apurls, ",")
 	umap := types.URLsMap(map[string]types.URLs{c.Name: c.PeerURLs})
-	return fmt.Errorf("failed to resolve %s to match --initial-cluster=%s (%v)", apStr, umap.String(), err)
+	return fmt.Errorf("failed to resolve %s to match --initial-cluster=%s (%w)", apStr, umap.String(), err)
 }
 
 func (c *ServerConfig) MemberDir() string { return datadir.ToMemberDir(c.DataDir) }
@@ -358,3 +362,7 @@ func (c *ServerConfig) BootstrapTimeoutEffective() time.Duration {
 }
 
 func (c *ServerConfig) BackendPath() string { return datadir.ToBackendFileName(c.DataDir) }
+
+func (c *ServerConfig) MaxRequestBytesWithOverhead() uint {
+	return c.MaxRequestBytes + grpcOverheadBytes
+}

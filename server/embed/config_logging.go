@@ -216,12 +216,6 @@ func NewZapLoggerBuilder(lg *zap.Logger) func(*Config) error {
 	}
 }
 
-// NewZapCoreLoggerBuilder - is a deprecated setter for the logger.
-// Deprecated: Use simpler NewZapLoggerBuilder. To be removed in etcd-3.6.
-func NewZapCoreLoggerBuilder(lg *zap.Logger, _ zapcore.Core, _ zapcore.WriteSyncer) func(*Config) error {
-	return NewZapLoggerBuilder(lg)
-}
-
 // SetupGlobalLoggers configures 'global' loggers (grpc, zapGlobal) based on the cfg.
 //
 // The method is not executed by embed server by default (since 3.5) to
@@ -273,11 +267,11 @@ func setupLogRotation(logOutputs []string, logRotateConfigJSON string) error {
 		var syntaxError *json.SyntaxError
 		switch {
 		case errors.As(err, &syntaxError):
-			return fmt.Errorf("improperly formatted log rotation config: %v", err)
+			return fmt.Errorf("improperly formatted log rotation config: %w", err)
 		case errors.As(err, &unmarshalTypeError):
-			return fmt.Errorf("invalid log rotation config: %v", err)
+			return fmt.Errorf("invalid log rotation config: %w", err)
 		default:
-			return fmt.Errorf("fail to unmarshal log rotation config: %v", err)
+			return fmt.Errorf("fail to unmarshal log rotation config: %w", err)
 		}
 	}
 	zap.RegisterSink("rotate", func(u *url.URL) (zap.Sink, error) {

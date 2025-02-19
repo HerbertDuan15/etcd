@@ -40,9 +40,7 @@ func TestTracing(t *testing.T) {
 		"Wal creation tests are depending on embedded etcd server so are integration-level tests.")
 	// set up trace collector
 	listener, err := net.Listen("tcp", "localhost:")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	traceFound := make(chan struct{})
 	defer close(traceFound)
@@ -50,22 +48,22 @@ func TestTracing(t *testing.T) {
 	srv := grpc.NewServer()
 	traceservice.RegisterTraceServiceServer(srv, &traceServer{
 		traceFound: traceFound,
-		filterFunc: containsNodeListSpan})
+		filterFunc: containsNodeListSpan,
+	})
 
 	go srv.Serve(listener)
 	defer srv.Stop()
 
 	cfg := integration.NewEmbedConfig(t, "default")
-	cfg.ExperimentalEnableDistributedTracing = true
-	cfg.ExperimentalDistributedTracingAddress = listener.Addr().String()
-	cfg.ExperimentalDistributedTracingServiceName = "integration-test-tracing"
-	cfg.ExperimentalDistributedTracingSamplingRatePerMillion = 100
+
+	cfg.EnableDistributedTracing = true
+	cfg.DistributedTracingAddress = listener.Addr().String()
+	cfg.DistributedTracingServiceName = "integration-test-tracing"
+	cfg.DistributedTracingSamplingRatePerMillion = 100
 
 	// start an etcd instance with tracing enabled
 	etcdSrv, err := embed.StartEtcd(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer etcdSrv.Close()
 
 	select {
@@ -92,7 +90,8 @@ func TestTracing(t *testing.T) {
 
 	dialOptions := []grpc.DialOption{
 		grpc.WithUnaryInterceptor(otelgrpc.UnaryClientInterceptor(tracingOpts...)),
-		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor(tracingOpts...))}
+		grpc.WithStreamInterceptor(otelgrpc.StreamClientInterceptor(tracingOpts...)),
+	}
 	ccfg := clientv3.Config{DialOptions: dialOptions, Endpoints: []string{cfg.AdvertiseClientUrls[0].String()}}
 	cli, err := integration.NewClient(t, ccfg)
 	if err != nil {
@@ -141,7 +140,7 @@ type traceServer struct {
 }
 
 func (t *traceServer) Export(ctx context.Context, req *traceservice.ExportTraceServiceRequest) (*traceservice.ExportTraceServiceResponse, error) {
-	var emptyValue = traceservice.ExportTraceServiceResponse{}
+	emptyValue := traceservice.ExportTraceServiceResponse{}
 	if t.filterFunc(req) {
 		t.traceFound <- struct{}{}
 	}

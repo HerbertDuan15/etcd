@@ -50,6 +50,7 @@ import (
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	"go.etcd.io/etcd/client/pkg/v3/types"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/pkg/v3/featuregate"
 	"go.etcd.io/etcd/pkg/v3/grpctesting"
 	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/embed"
@@ -172,9 +173,10 @@ type ClusterConfig struct {
 	LeaseCheckpointPersist  bool
 
 	WatchProgressNotifyInterval time.Duration
-	ExperimentalMaxLearners     int
+	MaxLearners                 int
 	DisableStrictReconfigCheck  bool
 	CorruptCheckTime            time.Duration
+	Metrics                     string
 }
 
 type Cluster struct {
@@ -259,7 +261,7 @@ func (c *Cluster) ProtoMembers() []*pb.Member {
 	return ms
 }
 
-func (c *Cluster) mustNewMember(t testutil.TB) *Member {
+func (c *Cluster) MustNewMember(t testutil.TB) *Member {
 	memberNumber := c.LastMemberNum
 	c.LastMemberNum++
 
@@ -289,9 +291,10 @@ func (c *Cluster) mustNewMember(t testutil.TB) *Member {
 			LeaseCheckpointInterval:     c.Cfg.LeaseCheckpointInterval,
 			LeaseCheckpointPersist:      c.Cfg.LeaseCheckpointPersist,
 			WatchProgressNotifyInterval: c.Cfg.WatchProgressNotifyInterval,
-			ExperimentalMaxLearners:     c.Cfg.ExperimentalMaxLearners,
+			MaxLearners:                 c.Cfg.MaxLearners,
 			DisableStrictReconfigCheck:  c.Cfg.DisableStrictReconfigCheck,
 			CorruptCheckTime:            c.Cfg.CorruptCheckTime,
+			Metrics:                     c.Cfg.Metrics,
 		})
 	m.DiscoveryURL = c.Cfg.DiscoveryURL
 	return m
@@ -299,7 +302,7 @@ func (c *Cluster) mustNewMember(t testutil.TB) *Member {
 
 // addMember return PeerURLs of the added member.
 func (c *Cluster) addMember(t testutil.TB) types.URLs {
-	m := c.mustNewMember(t)
+	m := c.MustNewMember(t)
 
 	scheme := SchemeFromTLSInfo(c.Cfg.PeerTLS)
 
@@ -566,7 +569,7 @@ type Member struct {
 	GRPCServerOpts []grpc.ServerOption
 	GRPCServer     *grpc.Server
 	GRPCURL        string
-	GRPCBridge     *bridge
+	GRPCBridge     Bridge
 
 	// ServerClient is a clientv3 that directly calls the etcdserver.
 	ServerClient *clientv3.Client
@@ -614,9 +617,10 @@ type MemberConfig struct {
 	LeaseCheckpointInterval     time.Duration
 	LeaseCheckpointPersist      bool
 	WatchProgressNotifyInterval time.Duration
-	ExperimentalMaxLearners     int
+	MaxLearners                 int
 	DisableStrictReconfigCheck  bool
 	CorruptCheckTime            time.Duration
+	Metrics                     string
 }
 
 // MustNewMember return an inited member with the given name. If peerTLS is
@@ -715,9 +719,7 @@ func MustNewMember(t testutil.TB, mcfg MemberConfig) *Member {
 	m.UseIP = mcfg.UseIP
 	m.UseBridge = mcfg.UseBridge
 	m.UseTCP = mcfg.UseTCP
-	m.EnableLeaseCheckpoint = mcfg.EnableLeaseCheckpoint
 	m.LeaseCheckpointInterval = mcfg.LeaseCheckpointInterval
-	m.LeaseCheckpointPersist = mcfg.LeaseCheckpointPersist
 
 	m.WatchProgressNotifyInterval = mcfg.WatchProgressNotifyInterval
 
@@ -727,15 +729,20 @@ func MustNewMember(t testutil.TB, mcfg MemberConfig) *Member {
 	}
 	m.WarningApplyDuration = embed.DefaultWarningApplyDuration
 	m.WarningUnaryRequestDuration = embed.DefaultWarningUnaryRequestDuration
-	m.ExperimentalMaxLearners = membership.DefaultMaxLearners
-	if mcfg.ExperimentalMaxLearners != 0 {
-		m.ExperimentalMaxLearners = mcfg.ExperimentalMaxLearners
+	m.MaxLearners = membership.DefaultMaxLearners
+	if mcfg.MaxLearners != 0 {
+		m.MaxLearners = mcfg.MaxLearners
 	}
+	m.Metrics = mcfg.Metrics
 	m.V2Deprecation = config.V2_DEPR_DEFAULT
 	m.GRPCServerRecorder = &grpctesting.GRPCRecorder{}
 
 	m.Logger, m.LogObserver = memberLogger(t, mcfg.Name)
 	m.ServerFeatureGate = features.NewDefaultServerFeatureGate(m.Name, m.Logger)
+	featureGates := fmt.Sprintf("LeaseCheckpoint=%v,LeaseCheckpointPersist=%v", mcfg.EnableLeaseCheckpoint, mcfg.LeaseCheckpointPersist)
+	if err := m.ServerFeatureGate.(featuregate.MutableFeatureGate).Set(featureGates); err != nil {
+		t.Fatalf("Set FeatureGate FAILED: %v", err)
+	}
 
 	m.StrictReconfigCheck = !mcfg.DisableStrictReconfigCheck
 	if err := m.listenGRPC(); err != nil {
@@ -780,13 +787,13 @@ func (m *Member) listenGRPC() error {
 	m.Logger.Info("LISTEN GRPC", zap.String("grpcAddr", grpcAddr), zap.String("m.Name", m.Name), zap.String("workdir", wd))
 	grpcListener, err := net.Listen(network, grpcAddr)
 	if err != nil {
-		return fmt.Errorf("listen failed on grpc socket %s (%v)", grpcAddr, err)
+		return fmt.Errorf("listen failed on grpc socket %s (%w)", grpcAddr, err)
 	}
 
 	addr := grpcListener.Addr().String()
 	_, port, err = net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("failed to parse grpc listen port from address %s (%v)", addr, err)
+		return fmt.Errorf("failed to parse grpc listen port from address %s (%w)", addr, err)
 	}
 	m.Port = port
 	m.GRPCURL = fmt.Sprintf("%s://%s", m.clientScheme(), addr)
@@ -819,7 +826,7 @@ func (m *Member) clientScheme() string {
 	return ""
 }
 
-func (m *Member) addBridge() (*bridge, error) {
+func (m *Member) addBridge() (Bridge, error) {
 	network, host, port := m.grpcAddr()
 	grpcAddr := net.JoinHostPort(host, m.Port)
 	bridgePort := fmt.Sprintf("%s%s", port, "0")
@@ -830,7 +837,7 @@ func (m *Member) addBridge() (*bridge, error) {
 	m.Logger.Info("LISTEN BRIDGE", zap.String("grpc-address", bridgeAddr), zap.String("member", m.Name))
 	bridgeListener, err := transport.NewUnixListener(bridgeAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen failed on bridge socket %s (%v)", bridgeAddr, err)
+		return nil, fmt.Errorf("listen failed on bridge socket %s (%w)", bridgeAddr, err)
 	}
 	m.GRPCBridge = newBridge(dialer{network: network, addr: grpcAddr}, bridgeListener)
 
@@ -840,7 +847,7 @@ func (m *Member) addBridge() (*bridge, error) {
 	return m.GRPCBridge, nil
 }
 
-func (m *Member) Bridge() *bridge {
+func (m *Member) Bridge() Bridge {
 	if !m.UseBridge {
 		m.Logger.Panic("Bridge not available. Please configure using bridge before creating Cluster.")
 	}
@@ -962,7 +969,7 @@ func (m *Member) Launch() error {
 	)
 	var err error
 	if m.Server, err = etcdserver.NewServer(m.ServerConfig); err != nil {
-		return fmt.Errorf("failed to initialize the etcd server: %v", err)
+		return fmt.Errorf("failed to initialize the etcd server: %w", err)
 	}
 	m.Server.SyncTicker = time.NewTicker(500 * time.Millisecond)
 	m.Server.Start()
@@ -975,9 +982,7 @@ func (m *Member) Launch() error {
 	}
 
 	if m.GRPCListener != nil {
-		var (
-			tlscfg *tls.Config
-		)
+		var tlscfg *tls.Config
 		if m.ClientTLSInfo != nil && !m.ClientTLSInfo.Empty() {
 			tlscfg, err = m.ClientTLSInfo.ServerConfig()
 			if err != nil {
@@ -1396,7 +1401,7 @@ func NewCluster(t testutil.TB, cfg *ClusterConfig) *Cluster {
 	c := &Cluster{Cfg: cfg}
 	ms := make([]*Member, cfg.Size)
 	for i := 0; i < cfg.Size; i++ {
-		ms[i] = c.mustNewMember(t)
+		ms[i] = c.MustNewMember(t)
 	}
 	c.Members = ms
 	if err := c.fillClusterForMembers(); err != nil {
@@ -1568,7 +1573,7 @@ func (c *Cluster) GetLearnerMembers() ([]*pb.Member, error) {
 	cli := c.Client(0)
 	resp, err := cli.MemberList(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("failed to list member %v", err)
+		return nil, fmt.Errorf("failed to list member %w", err)
 	}
 	var learners []*pb.Member
 	for _, m := range resp.Members {
@@ -1582,7 +1587,7 @@ func (c *Cluster) GetLearnerMembers() ([]*pb.Member, error) {
 // AddAndLaunchLearnerMember creates a learner member, adds it to Cluster
 // via v3 MemberAdd API, and then launches the new member.
 func (c *Cluster) AddAndLaunchLearnerMember(t testutil.TB) {
-	m := c.mustNewMember(t)
+	m := c.MustNewMember(t)
 	m.IsLearner = true
 
 	scheme := SchemeFromTLSInfo(c.Cfg.PeerTLS)
@@ -1681,9 +1686,8 @@ func (p SortableProtoMemberSliceByPeerURLs) Less(i, j int) bool {
 }
 func (p SortableProtoMemberSliceByPeerURLs) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
 
-// MustNewMember creates a new member instance based on the response of V3 Member Add API.
-func (c *Cluster) MustNewMember(t testutil.TB, resp *clientv3.MemberAddResponse) *Member {
-	m := c.mustNewMember(t)
+// InitializeMemberWithResponse initializes a member with the response
+func (c *Cluster) InitializeMemberWithResponse(t testutil.TB, m *Member, resp *clientv3.MemberAddResponse) {
 	m.IsLearner = resp.Member.IsLearner
 	m.NewCluster = false
 
@@ -1693,5 +1697,4 @@ func (c *Cluster) MustNewMember(t testutil.TB, resp *clientv3.MemberAddResponse)
 	}
 	m.InitialPeerURLsMap[m.Name] = types.MustNewURLs(resp.Member.PeerURLs)
 	c.Members = append(c.Members, m)
-	return m
 }

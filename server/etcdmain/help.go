@@ -58,7 +58,7 @@ Member:
   --wal-dir ''
     Path to the dedicated wal directory.
   --snapshot-count '10000'
-    Number of committed transactions to trigger a snapshot to disk.
+    Number of committed transactions to trigger a snapshot to disk. Deprecated in v3.6 and will be decommissioned in v3.7.
   --heartbeat-interval '100'
     Time (in milliseconds) of a heartbeat interval.
   --election-timeout '1000'
@@ -72,9 +72,11 @@ Member:
   --listen-client-http-urls ''
     List of URLs to listen on for http only client traffic. Enabling this flag removes http services from --listen-client-urls.
   --max-snapshots '` + strconv.Itoa(embed.DefaultMaxSnapshots) + `'
-    Maximum number of snapshot files to retain (0 is unlimited).
+    Maximum number of snapshot files to retain (0 is unlimited). Deprecated in v3.6 and will be decommissioned in v3.7.
   --max-wals '` + strconv.Itoa(embed.DefaultMaxWALs) + `'
     Maximum number of wal files to retain (0 is unlimited).
+  --memory-mlock
+    Enable to enforce etcd pages (in particular bbolt) to stay in RAM.
   --quota-backend-bytes '0'
     Raise alarms when backend size exceeds the given quota (0 defaults to low space quota).
   --backend-bbolt-freelist-type 'map'
@@ -111,8 +113,6 @@ Member:
 Clustering:
   --initial-advertise-peer-urls 'http://localhost:2380'
     List of this member's peer URLs to advertise to the rest of the cluster.
-  --experimental-set-member-localaddr 'false'
-    Enable using the first specified and non-loopback local address from initial-advertise-peer-urls as the local address when communicating with a peer.
   --initial-cluster 'default=http://localhost:2380'
     Initial cluster configuration for bootstrapping.
   --initial-cluster-state 'new'
@@ -169,12 +169,12 @@ Clustering:
   --auto-compaction-mode 'periodic'
     Interpret 'auto-compaction-retention' one of: periodic|revision. 'periodic' for duration based retention, defaulting to hours if no time unit is provided (e.g. '5m'). 'revision' for revision number based retention.
   --v2-deprecation '` + string(cconfig.V2DeprDefault) + `'
-    Phase of v2store deprecation. Allows to opt-in for higher compatibility mode.
+    Phase of v2store deprecation. Deprecated and scheduled for removal in v3.8. The default value is enforced, ignoring user input.
     Supported values:
       'not-yet'                // Issues a warning if v2store have meaningful content (default in v3.5)
-      'write-only'             // Custom v2 state is not allowed (planned default in v3.6)
-      'write-only-drop-data'   // Custom v2 state will get DELETED !
-      'gone'                   // v2store is not maintained any longer. (planned default in v3.7)
+      'write-only'             // Custom v2 state is not allowed (default in v3.6)
+      'write-only-drop-data'   // Custom v2 state will get DELETED ! (planned default in v3.7)
+      'gone'                   // v2store is not maintained any longer. (planned to cleanup anything related to v2store in v3.8)
 
 Security:
   --cert-file ''
@@ -262,57 +262,89 @@ Logging:
 
 Experimental distributed tracing:
   --experimental-enable-distributed-tracing 'false'
-    Enable experimental distributed tracing.
+    Enable experimental distributed tracing. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--enable-distributed-tracing' instead.
+  --enable-distributed-tracing 'false'
+    Enable distributed tracing.
   --experimental-distributed-tracing-address 'localhost:4317'
+    Distributed tracing collector address. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--distributed-tracing-address' instead.
+  --distributed-tracing-address 'localhost:4317'
     Distributed tracing collector address.
   --experimental-distributed-tracing-service-name 'etcd'
+    Distributed tracing service name, must be same across all etcd instances. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--distributed-tracing-service-name' instead.
+  --distributed-tracing-service-name 'etcd'
     Distributed tracing service name, must be same across all etcd instances.
   --experimental-distributed-tracing-instance-id ''
+    Distributed tracing instance ID, must be unique per each etcd instance. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--distributed-tracing-instance-id' instead.
+  --distributed-tracing-instance-id ''
     Distributed tracing instance ID, must be unique per each etcd instance.
   --experimental-distributed-tracing-sampling-rate '0'
-    Number of samples to collect per million spans for distributed tracing. Disabled by default.
+    Number of samples to collect per million spans for distributed tracing. Disabled by default. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--distributed-tracing-sampling-rate' instead.
+  --distributed-tracing-sampling-rate '0'
+    Number of samples to collect per million spans for distributed tracing.
 
 Experimental feature:
   --experimental-initial-corrupt-check 'false'
-    Enable to check data corruption before serving any client/peer traffic.
+    Enable to check data corruption before serving any client/peer traffic. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=InitialCorruptCheck=true' instead.
   --experimental-corrupt-check-time '0s'
+    Duration of time between cluster corruption check passes. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--corrupt-check-time' instead.
+  --corrupt-check-time '0s'
     Duration of time between cluster corruption check passes.
   --experimental-compact-hash-check-enabled 'false'
-    Enable leader to periodically check followers compaction hashes.
+    Enable leader to periodically check followers compaction hashes. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=CompactHashCheck=true' instead.
   --experimental-compact-hash-check-time '1m'
+    Duration of time between leader checks followers compaction hashes. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--compact-hash-check-time' instead.
+  --compact-hash-check-time '1m'
     Duration of time between leader checks followers compaction hashes.
   --experimental-enable-lease-checkpoint 'false'
-    ExperimentalEnableLeaseCheckpoint enables primary lessor to persist lease remainingTTL to prevent indefinite auto-renewal of long lived leases.
+    ExperimentalEnableLeaseCheckpoint enables primary lessor to persist lease remainingTTL to prevent indefinite auto-renewal of long lived leases. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=LeaseCheckpoint=true' instead.
   --experimental-compaction-batch-limit 1000
-    ExperimentalCompactionBatchLimit sets the maximum revisions deleted in each compaction batch.
+    ExperimentalCompactionBatchLimit sets the maximum revisions deleted in each compaction batch. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--compaction-batch-limit' instead.
+  --compaction-batch-limit 1000
+    CompactionBatchLimit sets the maximum revisions deleted in each compaction batch.
   --experimental-peer-skip-client-san-verification 'false'
+    Skip verification of SAN field in client certificate for peer connections. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--peer-skip-client-san-verification' instead.
+  --peer-skip-client-san-verification 'false'
     Skip verification of SAN field in client certificate for peer connections.
   --experimental-watch-progress-notify-interval '10m'
+    Duration of periodical watch progress notification. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--watch-progress-notify-interval' instead.
+  --watch-progress-notify-interval '10m'
     Duration of periodical watch progress notification.
   --experimental-warning-apply-duration '100ms'
+    Warning is generated if requests take more than this duration. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--warning-apply-duration' instead.
+  --warning-apply-duration '100ms'
     Warning is generated if requests take more than this duration.
   --experimental-txn-mode-write-with-shared-buffer 'true'
-    Enable the write transaction to use a shared buffer in its readonly check operations.
+    Enable the write transaction to use a shared buffer in its readonly check operations. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=TxnModeWriteWithSharedBuffer=true' instead.
   --experimental-bootstrap-defrag-threshold-megabytes
+    Enable the defrag during etcd server bootstrap on condition that it will free at least the provided threshold of disk space. Needs to be set to non-zero value to take effect. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--bootstrap-defrag-threshold-megabytes' instead.
+  --bootstrap-defrag-threshold-megabytes
     Enable the defrag during etcd server bootstrap on condition that it will free at least the provided threshold of disk space. Needs to be set to non-zero value to take effect.
   --experimental-warning-unary-request-duration '300ms'
-    Set time duration after which a warning is generated if a unary request takes more than this duration. It's deprecated, and will be decommissioned in v3.7. Use --warning-unary-request-duration instead.
+    Set time duration after which a warning is generated if a unary request takes more than this duration. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--warning-unary-request-duration' instead.
   --experimental-max-learners '1'
+    Set the max number of learner members allowed in the cluster membership. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--max-learners' instead.
+  --max-learners '1'
     Set the max number of learner members allowed in the cluster membership.
   --experimental-snapshot-catch-up-entries '5000'
     Number of entries for a slow follower to catch up after compacting the raft storage entries.
   --experimental-compaction-sleep-interval
+    Sets the sleep interval between each compaction batch. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--compaction-sleep-interval' instead.
+  --compaction-sleep-interval
     Sets the sleep interval between each compaction batch.
   --experimental-downgrade-check-time
+    Duration of time between two downgrade status checks. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--downgrade-check-time' instead.
+  --downgrade-check-time
     Duration of time between two downgrade status checks.
   --experimental-enable-lease-checkpoint-persist 'false'
-    Enable persisting remainingTTL to prevent indefinite auto-renewal of long lived leases. Always enabled in v3.6. Should be used to ensure smooth upgrade from v3.5 clusters with this feature enabled. Requires experimental-enable-lease-checkpoint to be enabled.
+    Enable persisting remainingTTL to prevent indefinite auto-renewal of long lived leases. Always enabled in v3.6. Should be used to ensure smooth upgrade from v3.5 clusters with this feature enabled. Requires experimental-enable-lease-checkpoint to be enabled. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=LeaseCheckpointPersist=true' instead.
   --experimental-memory-mlock
-    Enable to enforce etcd pages (in particular bbolt) to stay in RAM.
+    Enable to enforce etcd pages (in particular bbolt) to stay in RAM. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--memory-mlock' instead.
   --experimental-snapshot-catchup-entries
+    Number of entries for a slow follower to catch up after compacting the raft storage entries. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--snapshot-catchup-entries' instead.
+  --snapshot-catchup-entries
     Number of entries for a slow follower to catch up after compacting the raft storage entries.
   --experimental-stop-grpc-service-on-defrag
-    Enable etcd gRPC service to stop serving client requests on defragmentation. It's deprecated, and will be decommissioned in v3.7. Use '--feature-gates=StopGRPCServiceOnDefrag=true' instead.
+    Enable etcd gRPC service to stop serving client requests on defragmentation. Deprecated in v3.6 and will be decommissioned in v3.7. Use '--feature-gates=StopGRPCServiceOnDefrag=true' instead.
 
 Unsafe feature:
   --force-new-cluster 'false'

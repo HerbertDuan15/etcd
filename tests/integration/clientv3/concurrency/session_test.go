@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -28,18 +29,12 @@ import (
 
 func TestSessionOptions(t *testing.T) {
 	cli, err := integration2.NewClient(t, clientv3.Config{Endpoints: exampleEndpoints()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cli.Close()
 	lease, err := cli.Grant(context.Background(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	s, err := concurrency.NewSession(cli, concurrency.WithLease(lease.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Close()
 	assert.Equal(t, s.Lease(), lease.ID)
 
@@ -49,20 +44,16 @@ func TestSessionOptions(t *testing.T) {
 	case <-time.After(time.Millisecond * 100):
 		t.Fatal("session did not get orphaned as expected")
 	}
-
 }
+
 func TestSessionTTLOptions(t *testing.T) {
 	cli, err := integration2.NewClient(t, clientv3.Config{Endpoints: exampleEndpoints()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cli.Close()
 
-	var setTTL = 90
+	setTTL := 90
 	s, err := concurrency.NewSession(cli, concurrency.WithTTL(setTTL))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Close()
 
 	leaseID := s.Lease()
@@ -73,7 +64,6 @@ func TestSessionTTLOptions(t *testing.T) {
 	}
 	if resp.TTL == -1 {
 		t.Errorf("client lease should not be expired: %d", resp.TTL)
-
 	}
 	if resp.TTL == 60 {
 		t.Errorf("default TTL value is used in the session, instead of set TTL: %d", setTTL)
@@ -81,23 +71,16 @@ func TestSessionTTLOptions(t *testing.T) {
 	if resp.TTL >= int64(setTTL) || resp.TTL < int64(setTTL)-20 {
 		t.Errorf("Session TTL from lease should be less, but close to set TTL %d, have: %d", setTTL, resp.TTL)
 	}
-
 }
 
 func TestSessionCtx(t *testing.T) {
 	cli, err := integration2.NewClient(t, clientv3.Config{Endpoints: exampleEndpoints()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer cli.Close()
 	lease, err := cli.Grant(context.Background(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	s, err := concurrency.NewSession(cli, concurrency.WithLease(lease.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer s.Close()
 	assert.Equal(t, s.Lease(), lease.ID)
 

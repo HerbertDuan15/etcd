@@ -119,13 +119,14 @@ func (s *v3Manager) Status(dbPath string) (ds Status, err error) {
 		return ds, err
 	}
 
-	db, err := bolt.Open(dbPath, 0400, &bolt.Options{ReadOnly: true})
+	db, err := bolt.Open(dbPath, 0o400, &bolt.Options{ReadOnly: true})
 	if err != nil {
 		return ds, err
 	}
 	defer db.Close()
 
 	h := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	seenKeys := make(map[string]struct{})
 
 	if err = db.View(func(tx *bolt.Tx) error {
 		// check snapshot file integrity first
@@ -175,8 +176,14 @@ func (s *v3Manager) Status(dbPath string) (ds Status, err error) {
 					if err != nil {
 						return fmt.Errorf("cannot unmarshal value, key: %q value: %q err: %w", k, v, err)
 					}
+					key := string(kv.Key)
+					// refer to https://etcd.io/docs/v3.5/learning/data_model/
+					if !mvcc.IsTombstone(k) {
+						seenKeys[key] = struct{}{}
+					} else {
+						delete(seenKeys, key)
+					}
 				}
-				ds.TotalKey++
 				return nil
 			}); err != nil {
 				return fmt.Errorf("error during bucket key iteration, name: %q err: %w", string(next), err)
@@ -187,6 +194,7 @@ func (s *v3Manager) Status(dbPath string) (ds Status, err error) {
 		return ds, err
 	}
 
+	ds.TotalKey = len(seenKeys)
 	ds.Hash = h.Sum32()
 	return ds, nil
 }
@@ -449,7 +457,7 @@ func (s *v3Manager) copyAndVerifyDB() error {
 
 	outDbPath := s.outDbPath()
 
-	db, dberr := os.OpenFile(outDbPath, os.O_RDWR|os.O_CREATE, 0600)
+	db, dberr := os.OpenFile(outDbPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if dberr != nil {
 		return dberr
 	}

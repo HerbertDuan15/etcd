@@ -192,7 +192,7 @@ func newDiscovery(lg *zap.Logger, dcfg *DiscoveryConfig, id types.ID) (*discover
 func (d *discovery) getCluster() (string, error) {
 	cls, clusterSize, rev, err := d.checkCluster()
 	if err != nil {
-		if err == ErrFullCluster {
+		if errors.Is(err, ErrFullCluster) {
 			return cls.getInitClusterStr(clusterSize)
 		}
 		return "", err
@@ -303,7 +303,7 @@ func (d *discovery) checkClusterRetry() (*clusterInfo, int, int64, error) {
 func (d *discovery) checkCluster() (*clusterInfo, int, int64, error) {
 	clusterSize, err := d.getClusterSize()
 	if err != nil {
-		if err == ErrSizeNotFound || err == ErrBadSizeKey {
+		if errors.Is(err, ErrSizeNotFound) || errors.Is(err, ErrBadSizeKey) {
 			return nil, 0, 0, err
 		}
 
@@ -436,6 +436,7 @@ func (cls *clusterInfo) Len() int { return len(cls.members) }
 func (cls *clusterInfo) Less(i, j int) bool {
 	return cls.members[i].createRev < cls.members[j].createRev
 }
+
 func (cls *clusterInfo) Swap(i, j int) {
 	cls.members[i], cls.members[j] = cls.members[j], cls.members[i]
 }
@@ -449,7 +450,7 @@ func (cls *clusterInfo) add(memberKey, memberValue string, rev int64) error {
 		return errors.New("invalid peer registry key")
 	}
 
-	if strings.IndexRune(memberValue, '=') == -1 {
+	if !strings.ContainsRune(memberValue, '=') {
 		// It must be in the format "member1=http://127.0.0.1:2380".
 		return errors.New("invalid peer info returned from discovery service")
 	}

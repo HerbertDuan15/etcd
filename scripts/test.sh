@@ -340,24 +340,15 @@ function shellcheck_pass {
 }
 
 function shellws_pass {
-  TAB=$'\t'
   log_callout "Ensuring no tab-based indention in shell scripts"
   local files
-  files=$(find ./ -name '*.sh' -print0 | xargs -0 )
-  # shellcheck disable=SC2206
-  files=( ${files[@]} "./scripts/build-binary.sh" "./scripts/build-docker.sh" "./scripts/release.sh" )
-  log_cmd "grep -E -n $'^ *${TAB}' ${files[*]}"
-  # shellcheck disable=SC2086
-  if grep -E -n $'^ *${TAB}' "${files[@]}" | sed $'s|${TAB}|[\\\\tab]|g'; then
-    log_error "FAIL: found tab-based indention in bash scripts. Use '  ' (double space)."
-    local files_with_tabs
-    files_with_tabs=$(grep -E -l $'^ *\\t' "${files[@]}")
-    log_warning "Try: sed -i 's|\\t|  |g' $files_with_tabs"
-    return 1
-  else
-    log_success "SUCCESS: no tabulators found."
-    return 0
+  if files=$(find . -name '*.sh' -print0 | xargs -0 grep -E -n $'^\s*\t'); then
+    log_error "FAIL: found tab-based indention in the following bash scripts. Use '  ' (double space):"
+    log_error "${files}"
+    log_warning "Suggestion: run \"make fix\" to address the issue."
+    return 255
   fi
+  log_success "SUCCESS: no tabulators found."
 }
 
 function markdown_marker_pass {
@@ -442,29 +433,6 @@ function license_header_pass {
   run_for_modules generic_checker license_header_per_module
 }
 
-function receiver_name_for_package {
-  # bash 3.x compatible replacement of: mapfile -t gofiles < <(go_srcs_in_module)
-  local gofiles=()
-  while IFS= read -r line; do gofiles+=("$line"); done < <(go_srcs_in_module)
-
-  recvs=$(grep 'func ([^*]' "${gofiles[@]}"  | tr  ':' ' ' |  \
-    awk ' { print $2" "$3" "$4" "$1 }' | sed "s/[a-zA-Z\\.]*go//g" |  sort  | uniq  | \
-    grep -Ev  "(Descriptor|Proto|_)"  | awk ' { print $3" "$4 } ' | sort | uniq -c | grep -v ' 1 ' | awk ' { print $2 } ')
-  if [ -n "${recvs}" ]; then
-    # shellcheck disable=SC2206
-    recvs=($recvs)
-    for recv in "${recvs[@]}"; do
-      log_error "Mismatched receiver for $recv..."
-      grep "$recv" "${gofiles[@]}" | grep 'func ('
-    done
-    return 255
-  fi
-}
-
-function receiver_name_pass {
-  run_for_modules receiver_name_for_package
-}
-
 # goword_for_package package
 # checks spelling and comments in the 'package' in the current module
 #
@@ -509,7 +477,7 @@ function bom_pass {
   log_callout "Checking bill of materials..."
   # https://github.com/golang/go/commit/7c388cc89c76bc7167287fb488afcaf5a4aa12bf
   # shellcheck disable=SC2207
-  modules=($(modules_exp))
+  modules=($(modules_for_bom))
 
   # Internally license-bill-of-materials tends to modify go.sum
   run cp go.sum go.sum.tmp || return 2
@@ -608,7 +576,13 @@ function release_pass {
     log_warning "fallback to" ${UPGRADE_VER}
   fi
 
-  local file="etcd-$UPGRADE_VER-linux-$GOARCH.tar.gz"
+  local file
+  if [[ "$(uname -s)" == 'Darwin' ]]; then
+    file="etcd-$UPGRADE_VER-darwin-$GOARCH.zip"
+  else
+    file="etcd-$UPGRADE_VER-linux-$GOARCH.tar.gz"
+  fi
+
   log_callout "Downloading $file"
 
   set +e
@@ -628,34 +602,11 @@ function release_pass {
 }
 
 function mod_tidy_for_module {
-  # Watch for upstream solution: https://github.com/golang/go/issues/27005
-  local tmpModDir
-  tmpModDir=$(mktemp -d -t 'tmpModDir.XXXXXX')
-  run cp "./go.mod" "${tmpModDir}" || return 2
-
-  # Guarantees keeping go.sum minimal
-  # If this is causing too much problems, we should
-  # stop controlling go.sum at all.
-  rm go.sum
-  run go mod tidy || return 2
-
-  set +e
-  local tmpFileGoModInSync
-  diff -C 5 "${tmpModDir}/go.mod" "./go.mod"
-  tmpFileGoModInSync="$?"
-
-  # Bring back initial state
-  mv "${tmpModDir}/go.mod" "./go.mod"
-
-  if [ "${tmpFileGoModInSync}" -ne 0 ]; then
-    log_error "${PWD}/go.mod is not in sync with 'go mod tidy'"
-    return 255
-  fi
-  set -e
+  run go mod tidy -diff
 }
 
 function mod_tidy_pass {
-  run_for_modules mod_tidy_for_module
+  run_for_modules generic_checker mod_tidy_for_module
 }
 
 function proto_annotations_pass {

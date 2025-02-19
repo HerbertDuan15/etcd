@@ -13,7 +13,7 @@
 		"licenses": [
 			{
 				"type": "MIT License",
-				"confidence": 1
+				"confidence": 0.96875
 			}
 		]
 	},
@@ -144,7 +144,7 @@
 		]
 	},
 	{
-		"project": "github.com/golang-jwt/jwt/v4",
+		"project": "github.com/golang-jwt/jwt/v5",
 		"licenses": [
 			{
 				"type": "MIT License",
@@ -216,7 +216,16 @@
 		]
 	},
 	{
-		"project": "github.com/grpc-ecosystem/go-grpc-prometheus",
+		"project": "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus",
+		"licenses": [
+			{
+				"type": "Apache License 2.0",
+				"confidence": 1
+			}
+		]
+	},
+	{
+		"project": "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors",
 		"licenses": [
 			{
 				"type": "Apache License 2.0",
@@ -247,6 +256,33 @@
 		"licenses": [
 			{
 				"type": "Apache License 2.0",
+				"confidence": 1
+			}
+		]
+	},
+	{
+		"project": "github.com/klauspost/compress",
+		"licenses": [
+			{
+				"type": "Apache License 2.0",
+				"confidence": 0.9376299376299376
+			}
+		]
+	},
+	{
+		"project": "github.com/klauspost/compress/internal/snapref",
+		"licenses": [
+			{
+				"type": "BSD 3-clause \"New\" or \"Revised\" License",
+				"confidence": 0.9663865546218487
+			}
+		]
+	},
+	{
+		"project": "github.com/klauspost/compress/zstd/internal/xxhash",
+		"licenses": [
+			{
+				"type": "MIT License",
 				"confidence": 1
 			}
 		]
@@ -302,6 +338,15 @@
 			{
 				"type": "BSD 3-clause \"New\" or \"Revised\" License",
 				"confidence": 0.9830508474576272
+			}
+		]
+	},
+	{
+		"project": "github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil",
+		"licenses": [
+			{
+				"type": "BSD 3-clause \"New\" or \"Revised\" License",
+				"confidence": 0.9663865546218487
 			}
 		]
 	},
@@ -531,6 +576,15 @@
 		]
 	},
 	{
+		"project": "go.opentelemetry.io/auto/sdk",
+		"licenses": [
+			{
+				"type": "Apache License 2.0",
+				"confidence": 1
+			}
+		]
+	},
+	{
 		"project": "go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc",
 		"licenses": [
 			{
@@ -740,6 +794,10 @@
 	{
 		"project": "sigs.k8s.io/yaml",
 		"licenses": [
+			{
+				"type": "Apache License 2.0",
+				"confidence": 1
+			},
 			{
 				"type": "BSD 3-clause \"New\" or \"Revised\" License",
 				"confidence": 1

@@ -21,26 +21,25 @@ import (
 	"time"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"go.etcd.io/etcd/tests/v3/robustness/model"
 	"go.etcd.io/etcd/tests/v3/robustness/report"
 )
 
-// ValidateAndReturnVisualize returns visualize as porcupine.linearizationInfo used to generate visualization is private.
-func ValidateAndReturnVisualize(t *testing.T, lg *zap.Logger, cfg Config, reports []report.ClientReport, persistedRequests []model.EtcdRequest, timeout time.Duration) (visualize func(basepath string) error) {
+func ValidateAndReturnVisualize(t *testing.T, lg *zap.Logger, cfg Config, reports []report.ClientReport, persistedRequests []model.EtcdRequest, timeout time.Duration) Results {
 	err := checkValidationAssumptions(reports, persistedRequests)
-	if err != nil {
-		t.Fatalf("Broken validation assumptions: %s", err)
-	}
+	require.NoErrorf(t, err, "Broken validation assumptions")
 	linearizableOperations := patchLinearizableOperations(reports, persistedRequests)
 	serializableOperations := filterSerializableOperations(reports)
 
-	linearizable, visualize := validateLinearizableOperationsAndVisualize(lg, linearizableOperations, timeout)
-	if linearizable != porcupine.Ok {
+	results := validateLinearizableOperationsAndVisualize(lg, linearizableOperations, timeout)
+	if results.Linearizable != porcupine.Ok {
 		t.Error("Failed linearization, skipping further validation")
-		return visualize
+		return results
 	}
+
 	// TODO: Use requests from linearization for replay.
 	replay := model.NewReplay(persistedRequests)
 
@@ -52,7 +51,7 @@ func ValidateAndReturnVisualize(t *testing.T, lg *zap.Logger, cfg Config, report
 	if err != nil {
 		t.Errorf("Failed validating serializable operations, err: %s", err)
 	}
-	return visualize
+	return results
 }
 
 type Config struct {
@@ -60,11 +59,7 @@ type Config struct {
 }
 
 func checkValidationAssumptions(reports []report.ClientReport, persistedRequests []model.EtcdRequest) error {
-	err := validatePutOperationUnique(reports)
-	if err != nil {
-		return err
-	}
-	err = validateEmptyDatabaseAtStart(reports)
+	err := validateEmptyDatabaseAtStart(reports)
 	if err != nil {
 		return err
 	}
@@ -76,36 +71,6 @@ func checkValidationAssumptions(reports []report.ClientReport, persistedRequests
 	err = validateNonConcurrentClientRequests(reports)
 	if err != nil {
 		return err
-	}
-	return nil
-}
-
-func validatePutOperationUnique(reports []report.ClientReport) error {
-	type KV struct {
-		Key   string
-		Value model.ValueOrHash
-	}
-	putValue := map[KV]struct{}{}
-	for _, r := range reports {
-		for _, op := range r.KeyValue {
-			request := op.Input.(model.EtcdRequest)
-			if request.Type != model.Txn {
-				continue
-			}
-			for _, op := range append(request.Txn.OperationsOnSuccess, request.Txn.OperationsOnFailure...) {
-				if op.Type != model.PutOperation {
-					continue
-				}
-				kv := KV{
-					Key:   op.Put.Key,
-					Value: op.Put.Value,
-				}
-				if _, ok := putValue[kv]; ok {
-					return fmt.Errorf("non unique put %v, required to patch operation history", kv)
-				}
-				putValue[kv] = struct{}{}
-			}
-		}
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ package etcdserver
 import (
 	"context"
 	"encoding/json"
+	errorspkg "errors"
 	"expvar"
 	"fmt"
 	"math"
@@ -63,6 +64,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/errors"
 	"go.etcd.io/etcd/server/v3/etcdserver/txn"
 	serverversion "go.etcd.io/etcd/server/v3/etcdserver/version"
+	"go.etcd.io/etcd/server/v3/features"
 	"go.etcd.io/etcd/server/v3/lease"
 	"go.etcd.io/etcd/server/v3/lease/leasehttp"
 	serverstorage "go.etcd.io/etcd/server/v3/storage"
@@ -108,6 +110,7 @@ const (
 	readyPercentThreshold = 0.9
 
 	DowngradeEnabledPath = "/downgrade/enabled"
+	memorySnapshotCount  = 100
 )
 
 var (
@@ -290,9 +293,10 @@ type EtcdServer struct {
 	clusterVersionChanged *notify.Notifier
 
 	*AccessController
-	// forceSnapshot can force snapshot be triggered after apply, independent of the snapshotCount.
+	// forceDiskSnapshot can force snapshot be triggered after apply, independent of the snapshotCount.
 	// Should only be set within apply code path. Used to force snapshot after cluster version downgrade.
-	forceSnapshot     bool
+	// TODO: Replace with flush db in v3.7 assuming v3.6 bootstraps from db file.
+	forceDiskSnapshot bool
 	corruptionChecker CorruptionChecker
 }
 
@@ -350,7 +354,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	srv.lessor = lease.NewLessor(srv.Logger(), srv.be, srv.cluster, lease.LessorConfig{
 		MinLeaseTTL:                int64(math.Ceil(minTTL.Seconds())),
 		CheckpointInterval:         cfg.LeaseCheckpointInterval,
-		CheckpointPersist:          cfg.LeaseCheckpointPersist,
+		CheckpointPersist:          cfg.ServerFeatureGate.Enabled(features.LeaseCheckpointPersist),
 		ExpiredLeasesRetryInterval: srv.Cfg.ReqTimeout(),
 	})
 
@@ -395,7 +399,7 @@ func NewServer(cfg config.ServerConfig) (srv *EtcdServer, err error) {
 	}
 	srv.uberApply = srv.NewUberApplier()
 
-	if srv.Cfg.EnableLeaseCheckpoint {
+	if srv.FeatureEnabled(features.LeaseCheckpoint) {
 		// setting checkpointer enables lease checkpoint feature.
 		srv.lessor.SetCheckpointer(func(ctx context.Context, cp *pb.LeaseCheckpointRequest) error {
 			if !srv.ensureLeadership() {
@@ -740,10 +744,11 @@ func (s *EtcdServer) ReportSnapshot(id uint64, status raft.SnapshotStatus) {
 }
 
 type etcdProgress struct {
-	confState raftpb.ConfState
-	snapi     uint64
-	appliedt  uint64
-	appliedi  uint64
+	confState           raftpb.ConfState
+	diskSnapshotIndex   uint64
+	memorySnapshotIndex uint64
+	appliedt            uint64
+	appliedi            uint64
 }
 
 // raftReadyHandler contains a set of EtcdServer operations to be called by raftNode,
@@ -808,10 +813,11 @@ func (s *EtcdServer) run() {
 	s.r.start(rh)
 
 	ep := etcdProgress{
-		confState: sn.Metadata.ConfState,
-		snapi:     sn.Metadata.Index,
-		appliedt:  sn.Metadata.Term,
-		appliedi:  sn.Metadata.Index,
+		confState:           sn.Metadata.ConfState,
+		diskSnapshotIndex:   sn.Metadata.Index,
+		memorySnapshotIndex: sn.Metadata.Index,
+		appliedt:            sn.Metadata.Term,
+		appliedi:            sn.Metadata.Index,
 	}
 
 	defer func() {
@@ -978,7 +984,7 @@ func (s *EtcdServer) applyAll(ep *etcdProgress, apply *toApply) {
 	// storage, since the raft routine might be slower than toApply routine.
 	<-apply.notifyc
 
-	s.triggerSnapshot(ep)
+	s.snapshotIfNeededAndCompactRaftLog(ep)
 	select {
 	// snapshot requested via send()
 	case m := <-s.r.msgSnapC:
@@ -997,7 +1003,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 	lg := s.Logger()
 	lg.Info(
 		"applying snapshot",
-		zap.Uint64("current-snapshot-index", ep.snapi),
+		zap.Uint64("current-snapshot-index", ep.diskSnapshotIndex),
 		zap.Uint64("current-applied-index", ep.appliedi),
 		zap.Uint64("incoming-leader-snapshot-index", toApply.snapshot.Metadata.Index),
 		zap.Uint64("incoming-leader-snapshot-term", toApply.snapshot.Metadata.Term),
@@ -1005,7 +1011,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 	defer func() {
 		lg.Info(
 			"applied snapshot",
-			zap.Uint64("current-snapshot-index", ep.snapi),
+			zap.Uint64("current-snapshot-index", ep.diskSnapshotIndex),
 			zap.Uint64("current-applied-index", ep.appliedi),
 			zap.Uint64("incoming-leader-snapshot-index", toApply.snapshot.Metadata.Index),
 			zap.Uint64("incoming-leader-snapshot-term", toApply.snapshot.Metadata.Term),
@@ -1016,7 +1022,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 	if toApply.snapshot.Metadata.Index <= ep.appliedi {
 		lg.Panic(
 			"unexpected leader snapshot from outdated index",
-			zap.Uint64("current-snapshot-index", ep.snapi),
+			zap.Uint64("current-snapshot-index", ep.diskSnapshotIndex),
 			zap.Uint64("current-applied-index", ep.appliedi),
 			zap.Uint64("incoming-leader-snapshot-index", toApply.snapshot.Metadata.Index),
 			zap.Uint64("incoming-leader-snapshot-term", toApply.snapshot.Metadata.Term),
@@ -1131,7 +1137,8 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 
 	ep.appliedt = toApply.snapshot.Metadata.Term
 	ep.appliedi = toApply.snapshot.Metadata.Index
-	ep.snapi = ep.appliedi
+	ep.diskSnapshotIndex = ep.appliedi
+	ep.memorySnapshotIndex = ep.appliedi
 	ep.confState = toApply.snapshot.Metadata.ConfState
 
 	// As backends and implementations like alarmsStore changed, we need
@@ -1141,7 +1148,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 
 func (s *EtcdServer) NewUberApplier() apply.UberApplier {
 	return apply.NewUberApplier(s.lg, s.be, s.KV(), s.alarmStore, s.authStore, s.lessor, s.cluster, s, s, s.consistIndex,
-		s.Cfg.WarningApplyDuration, s.Cfg.ExperimentalTxnModeWriteWithSharedBuffer, s.Cfg.QuotaBackendBytes)
+		s.Cfg.WarningApplyDuration, s.Cfg.ServerFeatureGate.Enabled(features.TxnModeWriteWithSharedBuffer), s.Cfg.QuotaBackendBytes)
 }
 
 func verifySnapshotIndex(snapshot raftpb.Snapshot, cindex uint64) {
@@ -1187,30 +1194,26 @@ func (s *EtcdServer) applyEntries(ep *etcdProgress, apply *toApply) {
 }
 
 func (s *EtcdServer) ForceSnapshot() {
-	s.forceSnapshot = true
+	s.forceDiskSnapshot = true
 }
 
-func (s *EtcdServer) triggerSnapshot(ep *etcdProgress) {
-	if !s.shouldSnapshot(ep) {
+func (s *EtcdServer) snapshotIfNeededAndCompactRaftLog(ep *etcdProgress) {
+	// TODO: Remove disk snapshot in v3.7
+	shouldSnapshotToDisk := s.shouldSnapshotToDisk(ep)
+	shouldSnapshotToMemory := s.shouldSnapshotToMemory(ep)
+	if !shouldSnapshotToDisk && !shouldSnapshotToMemory {
 		return
 	}
-	lg := s.Logger()
-	lg.Info(
-		"triggering snapshot",
-		zap.String("local-member-id", s.MemberID().String()),
-		zap.Uint64("local-member-applied-index", ep.appliedi),
-		zap.Uint64("local-member-snapshot-index", ep.snapi),
-		zap.Uint64("local-member-snapshot-count", s.Cfg.SnapshotCount),
-		zap.Bool("snapshot-forced", s.forceSnapshot),
-	)
-	s.forceSnapshot = false
-
-	s.snapshot(ep.appliedi, ep.confState)
-	ep.snapi = ep.appliedi
+	s.snapshot(ep, shouldSnapshotToDisk)
+	s.compactRaftLog(ep.appliedi)
 }
 
-func (s *EtcdServer) shouldSnapshot(ep *etcdProgress) bool {
-	return (s.forceSnapshot && ep.appliedi != ep.snapi) || (ep.appliedi-ep.snapi > s.Cfg.SnapshotCount)
+func (s *EtcdServer) shouldSnapshotToDisk(ep *etcdProgress) bool {
+	return (s.forceDiskSnapshot && ep.appliedi != ep.diskSnapshotIndex) || (ep.appliedi-ep.diskSnapshotIndex > s.Cfg.SnapshotCount)
+}
+
+func (s *EtcdServer) shouldSnapshotToMemory(ep *etcdProgress) bool {
+	return ep.appliedi > ep.memorySnapshotIndex+memorySnapshotCount
 }
 
 func (s *EtcdServer) hasMultipleVotingMembers() bool {
@@ -1223,7 +1226,8 @@ func (s *EtcdServer) isLeader() bool {
 
 // MoveLeader transfers the leader to the given transferee.
 func (s *EtcdServer) MoveLeader(ctx context.Context, lead, transferee uint64) error {
-	if !s.cluster.IsMemberExist(types.ID(transferee)) || s.cluster.Member(types.ID(transferee)).IsLearner {
+	member := s.cluster.Member(types.ID(transferee))
+	if member == nil || member.IsLearner {
 		return errors.ErrBadLeaderTransferee
 	}
 
@@ -1445,7 +1449,7 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 		learnerPromoteSucceed.Inc()
 		return resp, nil
 	}
-	if err != errors.ErrNotLeader {
+	if !errorspkg.Is(err, errors.ErrNotLeader) {
 		learnerPromoteFailed.WithLabelValues(err.Error()).Inc()
 		return resp, err
 	}
@@ -1464,13 +1468,13 @@ func (s *EtcdServer) PromoteMember(ctx context.Context, id uint64) ([]*membershi
 				return resp, nil
 			}
 			// If member promotion failed, return early. Otherwise keep retry.
-			if err == errors.ErrLearnerNotReady || err == membership.ErrIDNotFound || err == membership.ErrMemberNotLearner {
+			if errorspkg.Is(err, errors.ErrLearnerNotReady) || errorspkg.Is(err, membership.ErrIDNotFound) || errorspkg.Is(err, membership.ErrMemberNotLearner) {
 				return nil, err
 			}
 		}
 	}
 
-	if cctx.Err() == context.DeadlineExceeded {
+	if errorspkg.Is(cctx.Err(), context.DeadlineExceeded) {
 		return nil, errors.ErrTimeout
 	}
 	return nil, errors.ErrCanceled
@@ -1592,9 +1596,9 @@ func (s *EtcdServer) mayRemoveMember(id types.ID) error {
 	}
 
 	lg := s.Logger()
-	isLearner := s.cluster.IsMemberExist(id) && s.cluster.Member(id).IsLearner
+	member := s.cluster.Member(id)
 	// no need to check quorum when removing non-voting member
-	if isLearner {
+	if member != nil && member.IsLearner {
 		return nil
 	}
 
@@ -1772,6 +1776,7 @@ func (s *EtcdServer) publishV3(timeout time.Duration) {
 			ClientUrls: s.attributes.ClientURLs,
 		},
 	}
+	// gofail: var beforePublishing struct{}
 	lg := s.Logger()
 	for {
 		select {
@@ -1942,17 +1947,13 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry, shouldApplyV3 membership.
 		rp := &r
 		pbutil.MustUnmarshal(rp, e.Data)
 		s.lg.Debug("applyEntryNormal", zap.Stringer("V2request", rp))
-		s.applyV2Request((*RequestV2)(rp), shouldApplyV3)
-		s.w.Trigger(r.ID, Response{})
-		return
+		raftReq = v2ToV3Request(s.lg, (*RequestV2)(rp))
 	}
 	s.lg.Debug("applyEntryNormal", zap.Stringer("raftReq", &raftReq))
 
 	if raftReq.V2 != nil {
 		req := (*RequestV2)(raftReq.V2)
-		s.applyV2Request(req, shouldApplyV3)
-		s.w.Trigger(req.ID, Response{})
-		return
+		raftReq = v2ToV3Request(s.lg, req)
 	}
 
 	id := raftReq.ID
@@ -1980,7 +1981,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry, shouldApplyV3 membership.
 		return
 	}
 
-	if ar.Err != errors.ErrNoSpace || len(s.alarmStore.Get(pb.AlarmType_NOSPACE)) > 0 {
+	if !errorspkg.Is(ar.Err, errors.ErrNoSpace) || len(s.alarmStore.Get(pb.AlarmType_NOSPACE)) > 0 {
 		s.w.Trigger(id, ar)
 		return
 	}
@@ -2005,7 +2006,7 @@ func (s *EtcdServer) applyEntryNormal(e *raftpb.Entry, shouldApplyV3 membership.
 }
 
 func (s *EtcdServer) applyInternalRaftRequest(r *pb.InternalRaftRequest, shouldApplyV3 membership.ShouldApplyV3) *apply.Result {
-	if r.ClusterVersionSet == nil && r.ClusterMemberAttrSet == nil && r.DowngradeInfoSet == nil {
+	if r.ClusterVersionSet == nil && r.ClusterMemberAttrSet == nil && r.DowngradeInfoSet == nil && r.DowngradeVersionTest == nil {
 		if !shouldApplyV3 {
 			return nil
 		}
@@ -2028,6 +2029,11 @@ func (s *EtcdServer) applyInternalRaftRequest(r *pb.InternalRaftRequest, shouldA
 	case r.DowngradeInfoSet != nil:
 		op = "DowngradeInfoSet" // Implemented in 3.5.x
 		membershipApplier.DowngradeInfoSet(r.DowngradeInfoSet, shouldApplyV3)
+	case r.DowngradeVersionTest != nil:
+		op = "DowngradeVersionTest" // Implemented in 3.6 for test only
+		// do nothing, we are just to ensure etcdserver don't panic in case
+		// users(test cases) intentionally inject DowngradeVersionTestRequest
+		// into the WAL files.
 	default:
 		s.lg.Panic("not implemented apply", zap.Stringer("raft-request", r))
 		return nil
@@ -2129,46 +2135,64 @@ func (s *EtcdServer) applyConfChange(cc raftpb.ConfChange, confState *raftpb.Con
 }
 
 // TODO: non-blocking snapshot
-func (s *EtcdServer) snapshot(snapi uint64, confState raftpb.ConfState) {
-	d := GetMembershipInfoInV2Format(s.Logger(), s.cluster)
-	// commit kv to write metadata (for example: consistent index) to disk.
-	//
-	// This guarantees that Backend's consistent_index is >= index of last snapshot.
-	//
-	// KV().commit() updates the consistent index in backend.
-	// All operations that update consistent index must be called sequentially
-	// from applyAll function.
-	// So KV().Commit() cannot run in parallel with toApply. It has to be called outside
-	// the go routine created below.
-	s.KV().Commit()
-
+func (s *EtcdServer) snapshot(ep *etcdProgress, toDisk bool) {
 	lg := s.Logger()
+	d := GetMembershipInfoInV2Format(lg, s.cluster)
+	if toDisk {
+		s.Logger().Info(
+			"triggering snapshot",
+			zap.String("local-member-id", s.MemberID().String()),
+			zap.Uint64("local-member-applied-index", ep.appliedi),
+			zap.Uint64("local-member-snapshot-index", ep.diskSnapshotIndex),
+			zap.Uint64("local-member-snapshot-count", s.Cfg.SnapshotCount),
+			zap.Bool("snapshot-forced", s.forceDiskSnapshot),
+		)
+		s.forceDiskSnapshot = false
+		// commit kv to write metadata (for example: consistent index) to disk.
+		//
+		// This guarantees that Backend's consistent_index is >= index of last snapshot.
+		//
+		// KV().commit() updates the consistent index in backend.
+		// All operations that update consistent index must be called sequentially
+		// from applyAll function.
+		// So KV().Commit() cannot run in parallel with toApply. It has to be called outside
+		// the go routine created below.
+		s.KV().Commit()
+	}
 
 	// For backward compatibility, generate v2 snapshot from v3 state.
-	snap, err := s.r.raftStorage.CreateSnapshot(snapi, &confState, d)
+	snap, err := s.r.raftStorage.CreateSnapshot(ep.appliedi, &ep.confState, d)
 	if err != nil {
 		// the snapshot was done asynchronously with the progress of raft.
 		// raft might have already got a newer snapshot.
-		if err == raft.ErrSnapOutOfDate {
+		if errorspkg.Is(err, raft.ErrSnapOutOfDate) {
 			return
 		}
 		lg.Panic("failed to create snapshot", zap.Error(err))
 	}
+	ep.memorySnapshotIndex = ep.appliedi
 
 	verifyConsistentIndexIsLatest(lg, snap, s.consistIndex.ConsistentIndex())
 
-	// SaveSnap saves the snapshot to file and appends the corresponding WAL entry.
-	if err = s.r.storage.SaveSnap(snap); err != nil {
-		lg.Panic("failed to save snapshot", zap.Error(err))
-	}
-	if err = s.r.storage.Release(snap); err != nil {
-		lg.Panic("failed to release wal", zap.Error(err))
-	}
+	if toDisk {
+		// SaveSnap saves the snapshot to file and appends the corresponding WAL entry.
+		if err = s.r.storage.SaveSnap(snap); err != nil {
+			lg.Panic("failed to save snapshot", zap.Error(err))
+		}
+		ep.diskSnapshotIndex = ep.appliedi
+		if err = s.r.storage.Release(snap); err != nil {
+			lg.Panic("failed to release wal", zap.Error(err))
+		}
 
-	lg.Info(
-		"saved snapshot",
-		zap.Uint64("snapshot-index", snap.Metadata.Index),
-	)
+		lg.Info(
+			"saved snapshot to disk",
+			zap.Uint64("snapshot-index", snap.Metadata.Index),
+		)
+	}
+}
+
+func (s *EtcdServer) compactRaftLog(snapi uint64) {
+	lg := s.Logger()
 
 	// When sending a snapshot, etcd will pause compaction.
 	// After receives a snapshot, the slow follower needs to get all the entries right after
@@ -2185,17 +2209,16 @@ func (s *EtcdServer) snapshot(snapi uint64, confState raftpb.ConfState) {
 	if snapi > s.Cfg.SnapshotCatchUpEntries {
 		compacti = snapi - s.Cfg.SnapshotCatchUpEntries
 	}
-
-	err = s.r.raftStorage.Compact(compacti)
+	err := s.r.raftStorage.Compact(compacti)
 	if err != nil {
 		// the compaction was done asynchronously with the progress of raft.
 		// raft log might already been compact.
-		if err == raft.ErrCompacted {
+		if errorspkg.Is(err, raft.ErrCompacted) {
 			return
 		}
 		lg.Panic("failed to compact", zap.Error(err))
 	}
-	lg.Info(
+	lg.Debug(
 		"compacted Raft logs",
 		zap.Uint64("compact-index", compacti),
 	)
@@ -2312,7 +2335,7 @@ func (s *EtcdServer) monitorKVHash() {
 }
 
 func (s *EtcdServer) monitorCompactHash() {
-	if !s.Cfg.CompactHashCheckEnabled {
+	if !s.FeatureEnabled(features.CompactHashCheck) {
 		return
 	}
 	t := s.Cfg.CompactHashCheckTime
@@ -2353,12 +2376,12 @@ func (s *EtcdServer) updateClusterVersionV3(ver string) {
 	_, err := s.raftRequest(ctx, pb.InternalRaftRequest{ClusterVersionSet: &req})
 	cancel()
 
-	switch err {
-	case nil:
+	switch {
+	case errorspkg.Is(err, nil):
 		lg.Info("cluster version is updated", zap.String("cluster-version", version.Cluster(ver)))
 		return
 
-	case errors.ErrStopped:
+	case errorspkg.Is(err, errors.ErrStopped):
 		lg.Warn("aborting cluster version update; server is stopped", zap.Error(err))
 		return
 
@@ -2389,11 +2412,11 @@ func (s *EtcdServer) monitorDowngrade() {
 }
 
 func (s *EtcdServer) parseProposeCtxErr(err error, start time.Time) error {
-	switch err {
-	case context.Canceled:
+	switch {
+	case errorspkg.Is(err, context.Canceled):
 		return errors.ErrCanceled
 
-	case context.DeadlineExceeded:
+	case errorspkg.Is(err, context.DeadlineExceeded):
 		s.leadTimeMu.RLock()
 		curLeadElected := s.leadElectedTime
 		s.leadTimeMu.RUnlock()

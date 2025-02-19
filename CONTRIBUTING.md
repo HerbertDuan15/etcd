@@ -62,14 +62,16 @@ For more, because etcd uses Kubernetes' prow infrastructure to run CI jobs, the 
 If you find any flaky tests on testgrid, please
 
 1. Check [existing issues](https://github.com/etcd-io/etcd/issues?q=is%3Aissue+is%3Aopen+label%3Atype%2Fflake) to see if an issue has already been opened for this test. If not, open an issue with the `type/flake` label.
-2. Try to reproduce the flaky test on your machine via `stress`, for example, to reproduce the failure of `TestPeriodicSkipRevNotChange`:
+2. Try to reproduce the flaky test on your machine via [`stress`](https://pkg.go.dev/golang.org/x/tools/cmd/stress), for example, to reproduce the failure of `TestPeriodicSkipRevNotChange`:
 
 ```bash
+# install the stress utility
+go install golang.org/x/tools/cmd/stress@latest
 cd server/etcdserver/api/v3compactor
 # compile the test
-go test -v -c -count 1 -run "^TestPeriodicSkipRevNotChange$"
+go test -v -c -count 1
 # run the compiled test file using stress
-stress -p=8 ./v3compactor.test
+stress -p=8 ./v3compactor.test -test.run “^TestPeriodicSkipRevNotChange$”
 ```
 3. Fix it.
 
@@ -93,9 +95,17 @@ Follow the steps below to set up the environment:
 - [Clone the repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository)
 - Install Go by following [installation](https://go.dev/doc/install). Please check the minimal go version in [go.mod file](./go.mod#L3).
 - Install build tools:
-  - `make`: For Debian-based distributions you can run `sudo apt-get install build-essential`
-  - `protoc`: You can download it for your os. Use version [`v3.20.3`](https://github.com/protocolbuffers/protobuf/releases/tag/v3.20.3).
-  - `yamllint`: For Debian-based distribution you can run `sudo apt-get install yamllint`
+  - [`make`](https://www.gnu.org/software/make/): For Debian-based distributions
+    you can run `sudo apt-get install build-essential`
+  - [`protoc`](https://protobuf.dev/): You can download it for your os. Use
+    version
+    [`v3.20.3`](https://github.com/protocolbuffers/protobuf/releases/tag/v3.20.3).
+  - [`yamllint`](https://www.yamllint.com/): For Debian-based distribution you
+    can run `sudo apt-get install yamllint`
+  - [`jq`](https://jqlang.github.io/jq/): For Debian-based distribution you can
+    run `sudo apt-get install jq`
+  - [`xz`](https://tukaani.org/xz/): For Debian-based distribution you can run
+    `sudo apt-get install xz-utils`
 - Verify that everything is installed by running `make build`
 
 Note: `make build` runs with `-v`. Other build flags can be added through env `GO_BUILD_FLAGS`, **if required**. Eg.,
@@ -122,9 +132,10 @@ A codespace will open in a web-based version of Visual Studio Code. The [dev con
 ## Implement your change
 
 etcd code should follow the coding style suggested by the Golang community.
-See the [style doc](https://github.com/golang/go/wiki/CodeReviewComments) for details.
+See the [style doc](https://go.dev/wiki/CodeReviewComments) for details.
 
-Please ensure that your change passes static analysis (requires [golangci-lint](https://golangci-lint.run/usage/install/)):
+Please ensure that your change passes static analysis (requires
+[golangci-lint](https://golangci-lint.run/welcome/install/)):
 - `make verify` to verify if all checks pass.
 - `make verify-*` to verify a single check, for example, `make verify-bom` to verify if `bill-of-materials.json` file is up-to-date.
 - `make fix` to fix all checks.

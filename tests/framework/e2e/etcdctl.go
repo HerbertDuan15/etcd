@@ -17,6 +17,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -82,6 +83,11 @@ func WithEndpoints(endpoints []string) config.ClientOption {
 
 func (ctl *EtcdctlV3) DowngradeEnable(ctx context.Context, version string) error {
 	_, err := SpawnWithExpectLines(ctx, ctl.cmdArgs("downgrade", "enable", version), nil, expect.ExpectedResponse{Value: "Downgrade enable success"})
+	return err
+}
+
+func (ctl *EtcdctlV3) DowngradeCancel(ctx context.Context) error {
+	_, err := SpawnWithExpectLines(ctx, ctl.cmdArgs("downgrade", "cancel"), nil, expect.ExpectedResponse{Value: "Downgrade cancel success"})
 	return err
 }
 
@@ -252,7 +258,7 @@ func AddTxnResponse(resp *clientv3.TxnResponse, jsonData string) {
 	jd := json.NewDecoder(strings.NewReader(jsonData))
 	for {
 		t, e := jd.Token()
-		if e == io.EOF {
+		if errors.Is(e, io.EOF) {
 			break
 		}
 		if t == "response_range" {

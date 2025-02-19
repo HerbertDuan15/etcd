@@ -99,7 +99,7 @@ func watchInteractiveFunc(cmd *cobra.Command, osArgs []string, envKey, envRange 
 	for {
 		l, err := reader.ReadString('\n')
 		if err != nil {
-			cobrautl.ExitWithError(cobrautl.ExitInvalidInput, fmt.Errorf("error reading watch request line: %v", err))
+			cobrautl.ExitWithError(cobrautl.ExitInvalidInput, fmt.Errorf("error reading watch request line: %w", err))
 		}
 		l = strings.TrimSuffix(l, "\n")
 
@@ -134,7 +134,6 @@ func watchInteractiveFunc(cmd *cobra.Command, osArgs []string, envKey, envRange 
 			fmt.Fprintf(os.Stderr, "Invalid command %s (only support watch)\n", l)
 			continue
 		}
-
 	}
 }
 

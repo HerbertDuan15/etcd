@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package robustness
+package scenarios
 
 import (
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/tests/v3/framework/e2e"
+	"go.etcd.io/etcd/tests/v3/robustness/client"
 	"go.etcd.io/etcd/tests/v3/robustness/failpoint"
 	"go.etcd.io/etcd/tests/v3/robustness/options"
 	"go.etcd.io/etcd/tests/v3/robustness/random"
@@ -57,16 +61,16 @@ var trafficProfiles = []TrafficProfile{
 	},
 }
 
-type testScenario struct {
-	name      string
-	failpoint failpoint.Failpoint
-	cluster   e2e.EtcdProcessClusterConfig
-	traffic   traffic.Traffic
-	profile   traffic.Profile
-	watch     watchConfig
+type TestScenario struct {
+	Name      string
+	Failpoint failpoint.Failpoint
+	Cluster   e2e.EtcdProcessClusterConfig
+	Traffic   traffic.Traffic
+	Profile   traffic.Profile
+	Watch     client.WatchConfig
 }
 
-func exploratoryScenarios(_ *testing.T) []testScenario {
+func Exploratory(_ *testing.T) []TestScenario {
 	randomizableOptions := []e2e.EPClusterOption{
 		options.WithClusterOptionGroups(
 			options.ClusterOptions{options.WithTickMs(29), options.WithElectionMs(271)},
@@ -93,23 +97,23 @@ func exploratoryScenarios(_ *testing.T) []testScenario {
 		options.WithSubsetOptions(randomizableOptions...),
 		e2e.WithGoFailEnabled(true),
 		// Set low minimal compaction batch limit to allow for triggering multi batch compaction failpoints.
-		options.WithCompactionBatchLimit(10, 100, 1000),
-		e2e.WithWatchProcessNotifyInterval(100 * time.Millisecond),
+		options.WithExperimentalCompactionBatchLimit(10, 100, 1000),
+		e2e.WithExperimentalWatchProcessNotifyInterval(100 * time.Millisecond),
 	}
 
 	if e2e.CouldSetSnapshotCatchupEntries(e2e.BinPath.Etcd) {
-		baseOptions = append(baseOptions, e2e.WithSnapshotCatchUpEntries(100))
+		baseOptions = append(baseOptions, options.WithSnapshotCatchUpEntries(100, etcdserver.DefaultSnapshotCatchUpEntries))
 	}
-	scenarios := []testScenario{}
+	scenarios := []TestScenario{}
 	for _, tp := range trafficProfiles {
 		name := filepath.Join(tp.Name, "ClusterOfSize1")
 		clusterOfSize1Options := baseOptions
 		clusterOfSize1Options = append(clusterOfSize1Options, e2e.WithClusterSize(1))
-		scenarios = append(scenarios, testScenario{
-			name:    name,
-			traffic: tp.Traffic,
-			profile: tp.Profile,
-			cluster: *e2e.NewConfig(clusterOfSize1Options...),
+		scenarios = append(scenarios, TestScenario{
+			Name:    name,
+			Traffic: tp.Traffic,
+			Profile: tp.Profile,
+			Cluster: *e2e.NewConfig(clusterOfSize1Options...),
 		})
 	}
 
@@ -121,27 +125,27 @@ func exploratoryScenarios(_ *testing.T) []testScenario {
 		if fileutil.Exist(e2e.BinPath.EtcdLastRelease) {
 			clusterOfSize3Options = append(clusterOfSize3Options, mixedVersionOption)
 		}
-		scenarios = append(scenarios, testScenario{
-			name:    name,
-			traffic: tp.Traffic,
-			profile: tp.Profile,
-			cluster: *e2e.NewConfig(clusterOfSize3Options...),
+		scenarios = append(scenarios, TestScenario{
+			Name:    name,
+			Traffic: tp.Traffic,
+			Profile: tp.Profile,
+			Cluster: *e2e.NewConfig(clusterOfSize3Options...),
 		})
 	}
 	if e2e.BinPath.LazyFSAvailable() {
 		newScenarios := scenarios
 		for _, s := range scenarios {
 			// LazyFS increases the load on CPU, so we run it with more lightweight case.
-			if s.profile.MinimalQPS <= 100 && s.cluster.ClusterSize == 1 {
-				lazyfsCluster := s.cluster
+			if s.Profile.MinimalQPS <= 100 && s.Cluster.ClusterSize == 1 {
+				lazyfsCluster := s.Cluster
 				lazyfsCluster.LazyFSEnabled = true
-				newScenarios = append(newScenarios, testScenario{
-					name:      filepath.Join(s.name, "LazyFS"),
-					failpoint: s.failpoint,
-					cluster:   lazyfsCluster,
-					traffic:   s.traffic,
-					profile:   s.profile.WithoutCompaction(),
-					watch:     s.watch,
+				newScenarios = append(newScenarios, TestScenario{
+					Name:      filepath.Join(s.Name, "LazyFS"),
+					Failpoint: s.Failpoint,
+					Cluster:   lazyfsCluster,
+					Traffic:   s.Traffic,
+					Profile:   s.Profile.WithoutCompaction(),
+					Watch:     s.Watch,
 				})
 			}
 		}
@@ -150,63 +154,115 @@ func exploratoryScenarios(_ *testing.T) []testScenario {
 	return scenarios
 }
 
-func regressionScenarios(t *testing.T) []testScenario {
+func Regression(t *testing.T) []TestScenario {
 	v, err := e2e.GetVersionFromBinary(e2e.BinPath.Etcd)
-	if err != nil {
-		t.Fatalf("Failed checking etcd version binary, binary: %q, err: %v", e2e.BinPath.Etcd, err)
-	}
+	require.NoErrorf(t, err, "Failed checking etcd version binary, binary: %q", e2e.BinPath.Etcd)
 
-	scenarios := []testScenario{}
-	scenarios = append(scenarios, testScenario{
-		name:      "Issue14370",
-		failpoint: failpoint.RaftBeforeSavePanic,
-		profile:   traffic.LowTraffic,
-		traffic:   traffic.EtcdPutDeleteLease,
-		cluster: *e2e.NewConfig(
+	scenarios := []TestScenario{}
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue14370",
+		Failpoint: failpoint.RaftBeforeSavePanic,
+		Profile:   traffic.LowTraffic,
+		Traffic:   traffic.EtcdPutDeleteLease,
+		Cluster: *e2e.NewConfig(
 			e2e.WithClusterSize(1),
 			e2e.WithGoFailEnabled(true),
 		),
 	})
-	scenarios = append(scenarios, testScenario{
-		name:      "Issue14685",
-		failpoint: failpoint.DefragBeforeCopyPanic,
-		profile:   traffic.LowTraffic,
-		traffic:   traffic.EtcdPutDeleteLease,
-		cluster: *e2e.NewConfig(
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue14685",
+		Failpoint: failpoint.DefragBeforeCopyPanic,
+		Profile:   traffic.LowTraffic,
+		Traffic:   traffic.EtcdPutDeleteLease,
+		Cluster: *e2e.NewConfig(
 			e2e.WithClusterSize(1),
 			e2e.WithGoFailEnabled(true),
 		),
 	})
-	scenarios = append(scenarios, testScenario{
-		name:      "Issue13766",
-		failpoint: failpoint.KillFailpoint,
-		profile:   traffic.HighTrafficProfile,
-		traffic:   traffic.EtcdPut,
-		cluster: *e2e.NewConfig(
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue13766",
+		Failpoint: failpoint.KillFailpoint,
+		Profile:   traffic.HighTrafficProfile,
+		Traffic:   traffic.EtcdPut,
+		Cluster: *e2e.NewConfig(
 			e2e.WithSnapshotCount(100),
 		),
 	})
-	scenarios = append(scenarios, testScenario{
-		name: "Issue15220",
-		watch: watchConfig{
-			requestProgress: true,
+	scenarios = append(scenarios, TestScenario{
+		Name: "Issue15220",
+		Watch: client.WatchConfig{
+			RequestProgress: true,
 		},
-		profile:   traffic.LowTraffic,
-		traffic:   traffic.EtcdPutDeleteLease,
-		failpoint: failpoint.KillFailpoint,
-		cluster: *e2e.NewConfig(
+		Profile:   traffic.LowTraffic,
+		Traffic:   traffic.EtcdPutDeleteLease,
+		Failpoint: failpoint.KillFailpoint,
+		Cluster: *e2e.NewConfig(
 			e2e.WithClusterSize(1),
 		),
 	})
-	scenarios = append(scenarios, testScenario{
-		name:      "Issue17529",
-		profile:   traffic.HighTrafficProfile,
-		traffic:   traffic.Kubernetes,
-		failpoint: failpoint.SleepBeforeSendWatchResponse,
-		cluster: *e2e.NewConfig(
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue17529",
+		Profile:   traffic.HighTrafficProfile,
+		Traffic:   traffic.Kubernetes,
+		Failpoint: failpoint.SleepBeforeSendWatchResponse,
+		Cluster: *e2e.NewConfig(
 			e2e.WithClusterSize(1),
 			e2e.WithGoFailEnabled(true),
 			options.WithSnapshotCount(100),
+		),
+	})
+
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue17780",
+		Profile:   traffic.LowTraffic.WithoutCompaction(),
+		Failpoint: failpoint.BatchCompactBeforeSetFinishedCompactPanic,
+		Traffic:   traffic.Kubernetes,
+		Cluster: *e2e.NewConfig(
+			e2e.WithClusterSize(1),
+			e2e.WithExperimentalCompactionBatchLimit(300),
+			e2e.WithSnapshotCount(1000),
+			e2e.WithGoFailEnabled(true),
+		),
+	})
+
+	// NOTE:
+	//
+	// 1. All keys have only two revisions: creation and tombstone. With
+	// a small compaction batch limit, it's easy to separate a key's two
+	// revisions into different batch runs. If the compaction revision is a
+	// tombstone and the creation revision was deleted in a previous
+	// compaction run, we may encounter issue 19179.
+	//
+	// 2. It can be easily reproduced when using a lower QPS with a lower
+	// burstable value. A higher QPS can generate more new keys than
+	// expected, making it difficult to determine an optimal compaction
+	// batch limit within a larger key space.
+	scenarios = append(scenarios, TestScenario{
+		Name: "Issue19179",
+		Profile: traffic.Profile{
+			MinimalQPS:                     50,
+			MaximalQPS:                     100,
+			BurstableQPS:                   100,
+			ClientCount:                    8,
+			MaxNonUniqueRequestConcurrency: 3,
+		}.WithoutCompaction(),
+		Failpoint: failpoint.BatchCompactBeforeSetFinishedCompactPanic,
+		Traffic:   traffic.KubernetesCreateDelete,
+		Cluster: *e2e.NewConfig(
+			e2e.WithClusterSize(1),
+			e2e.WithExperimentalCompactionBatchLimit(50),
+			e2e.WithSnapshotCount(1000),
+			e2e.WithGoFailEnabled(true),
+		),
+	})
+	scenarios = append(scenarios, TestScenario{
+		Name:      "Issue18089",
+		Profile:   traffic.LowTraffic.WithCompactionPeriod(100 * time.Millisecond), // Use frequent compaction for high reproduce rate
+		Failpoint: failpoint.SleepBeforeSendWatchResponse,
+		Traffic:   traffic.EtcdDelete,
+		Cluster: *e2e.NewConfig(
+			e2e.WithClusterSize(1),
+			e2e.WithGoFailEnabled(true),
 		),
 	})
 	if v.Compare(version.V3_5) >= 0 {
@@ -218,12 +274,12 @@ func regressionScenarios(t *testing.T) []testScenario {
 		if e2e.CouldSetSnapshotCatchupEntries(e2e.BinPath.Etcd) {
 			opts = append(opts, e2e.WithSnapshotCatchUpEntries(100))
 		}
-		scenarios = append(scenarios, testScenario{
-			name:      "Issue15271",
-			failpoint: failpoint.BlackholeUntilSnapshot,
-			profile:   traffic.HighTrafficProfile,
-			traffic:   traffic.EtcdPut,
-			cluster:   *e2e.NewConfig(opts...),
+		scenarios = append(scenarios, TestScenario{
+			Name:      "Issue15271",
+			Failpoint: failpoint.BlackholeUntilSnapshot,
+			Profile:   traffic.HighTrafficProfile,
+			Traffic:   traffic.EtcdPut,
+			Cluster:   *e2e.NewConfig(opts...),
 		})
 	}
 	return scenarios

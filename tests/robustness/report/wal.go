@@ -109,20 +109,21 @@ func ReadWAL(lg *zap.Logger, dataDir string) (state raftpb.HardState, ents []raf
 	for {
 		w, err := wal.OpenForRead(lg, walDir, walpb.Snapshot{Index: 0})
 		if err != nil {
-			return state, nil, fmt.Errorf("failed to open WAL, err: %s", err)
+			return state, nil, fmt.Errorf("failed to open WAL, err: %w", err)
 		}
 		_, state, ents, err = w.ReadAll()
 		w.Close()
 		if err != nil {
-			if errors.Is(err, wal.ErrSnapshotNotFound) {
+			if errors.Is(err, wal.ErrSnapshotNotFound) || errors.Is(err, wal.ErrSliceOutOfRange) {
+				lg.Info("Error occurred when reading WAL entries", zap.Error(err))
 				return state, ents, nil
 			}
 			// we can only repair ErrUnexpectedEOF and we never repair twice.
 			if repaired || !errors.Is(err, io.ErrUnexpectedEOF) {
-				return state, nil, fmt.Errorf("failed to read WAL, cannot be repaired, err: %s", err)
+				return state, nil, fmt.Errorf("failed to read WAL, cannot be repaired, err: %w", err)
 			}
 			if !wal.Repair(lg, walDir) {
-				return state, nil, fmt.Errorf("failed to repair WAL, err: %s", err)
+				return state, nil, fmt.Errorf("failed to repair WAL, err: %w", err)
 			}
 			lg.Info("repaired WAL", zap.Error(err))
 			repaired = true
@@ -183,6 +184,8 @@ func parseEntryNormal(ent raftpb.Entry) (*model.EtcdRequest, error) {
 		return nil, nil
 	case raftReq.ClusterVersionSet != nil:
 		return nil, nil
+	case raftReq.DowngradeInfoSet != nil:
+		return nil, nil
 	case raftReq.Compaction != nil:
 		request := model.EtcdRequest{
 			Type:    model.Compact,
@@ -196,10 +199,20 @@ func parseEntryNormal(ent raftpb.Entry) (*model.EtcdRequest, error) {
 			OperationsOnFailure: []model.EtcdOperation{},
 		}
 		for _, cmp := range raftReq.Txn.Compare {
-			txn.Conditions = append(txn.Conditions, model.EtcdCondition{
-				Key:              string(cmp.Key),
-				ExpectedRevision: cmp.GetModRevision(),
-			})
+			switch {
+			case cmp.Result == pb.Compare_EQUAL && cmp.Target == pb.Compare_VERSION:
+				txn.Conditions = append(txn.Conditions, model.EtcdCondition{
+					Key:             string(cmp.Key),
+					ExpectedVersion: cmp.GetVersion(),
+				})
+			case cmp.Result == pb.Compare_EQUAL && cmp.Target == pb.Compare_MOD:
+				txn.Conditions = append(txn.Conditions, model.EtcdCondition{
+					Key:              string(cmp.Key),
+					ExpectedRevision: cmp.GetModRevision(),
+				})
+			default:
+				panic(fmt.Sprintf("unsupported condition: %+v", cmp))
+			}
 		}
 		for _, op := range raftReq.Txn.Success {
 			txn.OperationsOnSuccess = append(txn.OperationsOnSuccess, toEtcdOperation(op))

@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
 
 	"go.etcd.io/etcd/tests/v3/framework/testutils"
@@ -32,7 +32,7 @@ import (
 func TestDataReports(t *testing.T) {
 	testdataPath := testutils.MustAbsPath("../testdata/")
 	files, err := os.ReadDir(testdataPath)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	for _, file := range files {
 		if file.Name() == ".gitignore" {
 			continue
@@ -41,18 +41,14 @@ func TestDataReports(t *testing.T) {
 			lg := zaptest.NewLogger(t)
 			path := filepath.Join(testdataPath, file.Name())
 			reports, err := report.LoadClientReports(path)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			persistedRequests, err := report.LoadClusterPersistedRequests(lg, path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			visualize := ValidateAndReturnVisualize(t, zaptest.NewLogger(t), Config{}, reports, persistedRequests, 5*time.Minute)
+			require.NoError(t, err)
+			visualize := ValidateAndReturnVisualize(t, zaptest.NewLogger(t), Config{}, reports, persistedRequests, 5*time.Minute).Visualize
 
 			err = visualize(filepath.Join(path, "history.html"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 		})
 	}
 }
@@ -1637,8 +1633,8 @@ func TestValidateWatch(t *testing.T) {
 								{
 									Events: []model.WatchEvent{
 										putWatchEvent("a", "1", 2, true),
-										putWatchEventWithPrevKV("a", "2", 3, false, "1", 2),
-										deleteWatchEventWithPrevKV("a", 4, "2", 3),
+										putWatchEventWithPrevKVV("a", "2", 3, false, "1", 2, 1),
+										deleteWatchEventWithPrevKVV("a", 4, "2", 3, 2),
 										putWatchEvent("a", "4", 5, true),
 									},
 								},
@@ -1868,21 +1864,31 @@ func deleteWatchEvent(key string, rev int64) model.WatchEvent {
 }
 
 func putWatchEventWithPrevKV(key, value string, rev int64, isCreate bool, prevValue string, modRev int64) model.WatchEvent {
+	return putWatchEventWithPrevKVV(key, value, rev, isCreate, prevValue, modRev, 0)
+}
+
+func putWatchEventWithPrevKVV(key, value string, rev int64, isCreate bool, prevValue string, modRev, ver int64) model.WatchEvent {
 	return model.WatchEvent{
 		PersistedEvent: putPersistedEvent(key, value, rev, isCreate),
 		PrevValue: &model.ValueRevision{
 			Value:       model.ToValueOrHash(prevValue),
 			ModRevision: modRev,
+			Version:     ver,
 		},
 	}
 }
 
 func deleteWatchEventWithPrevKV(key string, rev int64, prevValue string, modRev int64) model.WatchEvent {
+	return deleteWatchEventWithPrevKVV(key, rev, prevValue, modRev, 0)
+}
+
+func deleteWatchEventWithPrevKVV(key string, rev int64, prevValue string, modRev, ver int64) model.WatchEvent {
 	return model.WatchEvent{
 		PersistedEvent: deletePersistedEvent(key, rev),
 		PrevValue: &model.ValueRevision{
 			Value:       model.ToValueOrHash(prevValue),
 			ModRevision: modRev,
+			Version:     ver,
 		},
 	}
 }

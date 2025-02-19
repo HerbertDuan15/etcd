@@ -35,25 +35,25 @@ const (
 	triggerTimeout = time.Minute
 )
 
-var (
-	allFailpoints = []Failpoint{
-		KillFailpoint, BeforeCommitPanic, AfterCommitPanic, RaftBeforeSavePanic, RaftAfterSavePanic,
-		DefragBeforeCopyPanic, DefragBeforeRenamePanic, BackendBeforePreCommitHookPanic, BackendAfterPreCommitHookPanic,
-		BackendBeforeStartDBTxnPanic, BackendAfterStartDBTxnPanic, BackendBeforeWritebackBufPanic,
-		BackendAfterWritebackBufPanic, CompactBeforeCommitScheduledCompactPanic, CompactAfterCommitScheduledCompactPanic,
-		CompactBeforeSetFinishedCompactPanic, CompactAfterSetFinishedCompactPanic, CompactBeforeCommitBatchPanic,
-		CompactAfterCommitBatchPanic, RaftBeforeLeaderSendPanic, BlackholePeerNetwork, DelayPeerNetwork,
-		RaftBeforeFollowerSendPanic, RaftBeforeApplySnapPanic, RaftAfterApplySnapPanic, RaftAfterWALReleasePanic,
-		RaftBeforeSaveSnapPanic, RaftAfterSaveSnapPanic, BlackholeUntilSnapshot,
-		BeforeApplyOneConfChangeSleep,
-		MemberReplace,
-		DropPeerNetwork,
-		RaftBeforeSaveSleep,
-		RaftAfterSaveSleep,
-		ApplyBeforeOpenSnapshot,
-		SleepBeforeSendWatchResponse,
-	}
-)
+var allFailpoints = []Failpoint{
+	KillFailpoint, BeforeCommitPanic, AfterCommitPanic, RaftBeforeSavePanic, RaftAfterSavePanic,
+	DefragBeforeCopyPanic, DefragBeforeRenamePanic, BackendBeforePreCommitHookPanic, BackendAfterPreCommitHookPanic,
+	BackendBeforeStartDBTxnPanic, BackendAfterStartDBTxnPanic, BackendBeforeWritebackBufPanic,
+	BackendAfterWritebackBufPanic, CompactBeforeCommitScheduledCompactPanic, CompactAfterCommitScheduledCompactPanic,
+	CompactBeforeSetFinishedCompactPanic, CompactAfterSetFinishedCompactPanic, CompactBeforeCommitBatchPanic,
+	CompactAfterCommitBatchPanic, RaftBeforeLeaderSendPanic, BlackholePeerNetwork, DelayPeerNetwork,
+	RaftBeforeFollowerSendPanic, RaftBeforeApplySnapPanic, RaftAfterApplySnapPanic, RaftAfterWALReleasePanic,
+	RaftBeforeSaveSnapPanic, RaftAfterSaveSnapPanic, BlackholeUntilSnapshot,
+	BeforeApplyOneConfChangeSleep,
+	MemberReplace,
+	MemberDowngrade,
+	MemberDowngradeUpgrade,
+	DropPeerNetwork,
+	RaftBeforeSaveSleep,
+	RaftAfterSaveSleep,
+	ApplyBeforeOpenSnapshot,
+	SleepBeforeSendWatchResponse,
+}
 
 func PickRandom(clus *e2e.EtcdProcessCluster, profile traffic.Profile) (Failpoint, error) {
 	availableFailpoints := make([]Failpoint, 0, len(allFailpoints))
@@ -80,22 +80,26 @@ func Validate(clus *e2e.EtcdProcessCluster, failpoint Failpoint, profile traffic
 }
 
 func Inject(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2e.EtcdProcessCluster, failpoint Failpoint, baseTime time.Time, ids identity.Provider) (*report.FailpointReport, error) {
-	ctx, cancel := context.WithTimeout(ctx, triggerTimeout)
+	timeout := triggerTimeout
+	if timeoutObj, ok := failpoint.(TimeoutInterface); ok {
+		timeout = timeoutObj.Timeout()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var err error
 
 	if err = verifyClusterHealth(ctx, t, clus); err != nil {
-		return nil, fmt.Errorf("failed to verify cluster health before failpoint injection, err: %v", err)
+		return nil, fmt.Errorf("failed to verify cluster health before failpoint injection, err: %w", err)
 	}
 	lg.Info("Triggering failpoint", zap.String("failpoint", failpoint.Name()))
 	start := time.Since(baseTime)
 	clientReport, err := failpoint.Inject(ctx, t, lg, clus, baseTime, ids)
 	if err != nil {
 		lg.Error("Failed to trigger failpoint", zap.String("failpoint", failpoint.Name()), zap.Error(err))
-		return nil, fmt.Errorf("failed triggering failpoint, err: %v", err)
+		return nil, fmt.Errorf("failed triggering failpoint, err: %w", err)
 	}
 	if err = verifyClusterHealth(ctx, t, clus); err != nil {
-		return nil, fmt.Errorf("failed to verify cluster health after failpoint injection, err: %v", err)
+		return nil, fmt.Errorf("failed to verify cluster health after failpoint injection, err: %w", err)
 	}
 	lg.Info("Finished triggering failpoint", zap.String("failpoint", failpoint.Name()))
 	end := time.Since(baseTime)
@@ -119,14 +123,14 @@ func verifyClusterHealth(ctx context.Context, _ *testing.T, clus *e2e.EtcdProces
 			DialKeepAliveTimeout: 100 * time.Millisecond,
 		})
 		if err != nil {
-			return fmt.Errorf("Error creating client for cluster %s: %v", clus.Procs[i].Config().Name, err)
+			return fmt.Errorf("Error creating client for cluster %s: %w", clus.Procs[i].Config().Name, err)
 		}
 		defer clusterClient.Close()
 
 		cli := healthpb.NewHealthClient(clusterClient.ActiveConnection())
 		resp, err := cli.Check(ctx, &healthpb.HealthCheckRequest{})
 		if err != nil {
-			return fmt.Errorf("Error checking member %s health: %v", clus.Procs[i].Config().Name, err)
+			return fmt.Errorf("Error checking member %s health: %w", clus.Procs[i].Config().Name, err)
 		}
 		if resp.Status != healthpb.HealthCheckResponse_SERVING {
 			return fmt.Errorf("Member %s health status expected %s, got %s",
@@ -146,4 +150,8 @@ type Failpoint interface {
 
 type AvailabilityChecker interface {
 	Available(e2e.EtcdProcessClusterConfig, e2e.EtcdProcess, traffic.Profile) bool
+}
+
+type TimeoutInterface interface {
+	Timeout() time.Duration
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -45,9 +46,8 @@ var (
 			{Choice: PutWithLease, Weight: 5},
 			{Choice: LeaseRevoke, Weight: 5},
 			{Choice: CompareAndSet, Weight: 5},
-			{Choice: Put, Weight: 18},
+			{Choice: Put, Weight: 20},
 			{Choice: LargePut, Weight: 5},
-			{Choice: Compact, Weight: 2},
 		},
 	}
 	EtcdPut Traffic = etcdTraffic{
@@ -65,6 +65,16 @@ var (
 			{Choice: Put, Weight: 40},
 		},
 	}
+	EtcdDelete Traffic = etcdTraffic{
+		keyCount:     10,
+		largePutSize: 32769,
+		leaseTTL:     DefaultLeaseTTL,
+		// Please keep the sum of weights equal 100.
+		requests: []random.ChoiceWeight[etcdRequestType]{
+			{Choice: Put, Weight: 50},
+			{Choice: Delete, Weight: 50},
+		},
+	}
 )
 
 type etcdTraffic struct {
@@ -72,21 +82,6 @@ type etcdTraffic struct {
 	requests     []random.ChoiceWeight[etcdRequestType]
 	leaseTTL     int64
 	largePutSize int
-}
-
-func (t etcdTraffic) WithoutCompact() Traffic {
-	requests := make([]random.ChoiceWeight[etcdRequestType], 0, len(t.requests))
-	for _, request := range t.requests {
-		if request.Choice != Compact {
-			requests = append(requests, request)
-		}
-	}
-	return etcdTraffic{
-		keyCount:     t.keyCount,
-		requests:     requests,
-		leaseTTL:     t.leaseTTL,
-		largePutSize: t.largePutSize,
-	}
 }
 
 func (t etcdTraffic) ExpectUniqueRevision() bool {
@@ -108,14 +103,13 @@ const (
 	LeaseRevoke   etcdRequestType = "leaseRevoke"
 	CompareAndSet etcdRequestType = "compareAndSet"
 	Defragment    etcdRequestType = "defragment"
-	Compact       etcdRequestType = "compact"
 )
 
 func (t etcdTraffic) Name() string {
 	return "Etcd"
 }
 
-func (t etcdTraffic) Run(ctx context.Context, c *client.RecordingClient, limiter *rate.Limiter, ids identity.Provider, lm identity.LeaseIDStorage, nonUniqueWriteLimiter ConcurrencyLimiter, finish <-chan struct{}) {
+func (t etcdTraffic) RunTrafficLoop(ctx context.Context, c *client.RecordingClient, limiter *rate.Limiter, ids identity.Provider, lm identity.LeaseIDStorage, nonUniqueWriteLimiter ConcurrencyLimiter, finish <-chan struct{}) {
 	lastOperationSucceeded := true
 	var lastRev int64
 	var requestType etcdRequestType
@@ -162,6 +156,35 @@ func (t etcdTraffic) Run(ctx context.Context, c *client.RecordingClient, limiter
 	}
 }
 
+func (t etcdTraffic) RunCompactLoop(ctx context.Context, c *client.RecordingClient, period time.Duration, finish <-chan struct{}) {
+	var lastRev int64 = 2
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-finish:
+			return
+		case <-ticker.C:
+		}
+		statusCtx, cancel := context.WithTimeout(ctx, RequestTimeout)
+		resp, err := c.Status(statusCtx, c.Endpoints()[0])
+		cancel()
+		if err != nil {
+			continue
+		}
+
+		// Range allows for both revision has been compacted and future revision errors
+		compactRev := random.RandRange(lastRev, resp.Header.Revision+5)
+		_, err = c.Compact(ctx, compactRev)
+		if err != nil {
+			continue
+		}
+		lastRev = compactRev
+	}
+}
+
 func filterOutNonUniqueEtcdWrites(choices []random.ChoiceWeight[etcdRequestType]) (resp []random.ChoiceWeight[etcdRequestType]) {
 	for _, choice := range choices {
 		if choice.Choice != Delete && choice.Choice != LeaseRevoke {
@@ -187,9 +210,17 @@ func (c etcdTrafficClient) Request(ctx context.Context, request etcdRequestType,
 	var limit int64
 	switch request {
 	case StaleGet:
-		_, rev, err = c.client.Get(opCtx, c.randomKey(), lastRev)
+		var resp *clientv3.GetResponse
+		resp, err = c.client.Get(opCtx, c.randomKey(), clientv3.WithRev(lastRev))
+		if err == nil {
+			rev = resp.Header.Revision
+		}
 	case Get:
-		_, rev, err = c.client.Get(opCtx, c.randomKey(), 0)
+		var resp *clientv3.GetResponse
+		resp, err = c.client.Get(opCtx, c.randomKey(), clientv3.WithRev(0))
+		if err == nil {
+			rev = resp.Header.Revision
+		}
 	case List:
 		var resp *clientv3.GetResponse
 		resp, err = c.client.Range(ctx, c.keyPrefix, clientv3.GetPrefixRangeEnd(c.keyPrefix), 0, limit)
@@ -222,15 +253,22 @@ func (c etcdTrafficClient) Request(ctx context.Context, request etcdRequestType,
 		}
 	case MultiOpTxn:
 		var resp *clientv3.TxnResponse
-		resp, err = c.client.Txn(opCtx, nil, c.pickMultiTxnOps(), nil)
+		resp, err = c.client.Txn(opCtx).Then(
+			c.pickMultiTxnOps()...,
+		).Commit()
 		if resp != nil {
 			rev = resp.Header.Revision
 		}
 	case CompareAndSet:
 		var kv *mvccpb.KeyValue
 		key := c.randomKey()
-		kv, rev, err = c.client.Get(opCtx, key, 0)
+		var resp *clientv3.GetResponse
+		resp, err = c.client.Get(opCtx, key, clientv3.WithRev(0))
 		if err == nil {
+			rev = resp.Header.Revision
+			if len(resp.Kvs) == 1 {
+				kv = resp.Kvs[0]
+			}
 			c.limiter.Wait(ctx)
 			var expectedRevision int64
 			if kv != nil {
@@ -238,7 +276,11 @@ func (c etcdTrafficClient) Request(ctx context.Context, request etcdRequestType,
 			}
 			txnCtx, txnCancel := context.WithTimeout(ctx, RequestTimeout)
 			var resp *clientv3.TxnResponse
-			resp, err = c.client.Txn(txnCtx, []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision)}, []clientv3.Op{clientv3.OpPut(key, fmt.Sprintf("%d", c.idProvider.NewRequestID()))}, nil)
+			resp, err = c.client.Txn(txnCtx).If(
+				clientv3.Compare(clientv3.ModRevision(key), "=", expectedRevision),
+			).Then(
+				clientv3.OpPut(key, fmt.Sprintf("%d", c.idProvider.NewRequestID())),
+			).Commit()
 			txnCancel()
 			if resp != nil {
 				rev = resp.Header.Revision
@@ -272,7 +314,7 @@ func (c etcdTrafficClient) Request(ctx context.Context, request etcdRequestType,
 		if leaseID != 0 {
 			var resp *clientv3.LeaseRevokeResponse
 			resp, err = c.client.LeaseRevoke(opCtx, leaseID)
-			//if LeaseRevoke has failed, do not remove the mapping.
+			// if LeaseRevoke has failed, do not remove the mapping.
 			if err == nil {
 				c.leaseStorage.RemoveLeaseID(c.client.ID)
 			}
@@ -283,12 +325,6 @@ func (c etcdTrafficClient) Request(ctx context.Context, request etcdRequestType,
 	case Defragment:
 		var resp *clientv3.DefragmentResponse
 		resp, err = c.client.Defragment(opCtx)
-		if resp != nil {
-			rev = resp.Header.Revision
-		}
-	case Compact:
-		var resp *clientv3.CompactResponse
-		resp, err = c.client.Compact(opCtx, lastRev)
 		if resp != nil {
 			rev = resp.Header.Revision
 		}

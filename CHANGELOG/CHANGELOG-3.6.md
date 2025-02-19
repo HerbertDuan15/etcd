@@ -6,6 +6,10 @@ Previous change logs can be found at [CHANGELOG-3.5](https://github.com/etcd-io/
 
 ## v3.6.0 (TBD)
 
+<hr>
+
+## v3.6.0-rc.0 (2025-02-13)
+
 See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 
 ### Breaking Changes
@@ -23,7 +27,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Removed [etcdctl snapshot status](https://github.com/etcd-io/etcd/pull/13809).
 - Removed [etcdctl snapshot restore](https://github.com/etcd-io/etcd/pull/13809).
 - Removed [etcdutl snapshot save](https://github.com/etcd-io/etcd/pull/13809).
-
+- Removed [NewZapCoreLoggerBuilder in server/embed](https://github.com/etcd-io/etcd/pull/19404)
 
 ### etcdctl v3
 
@@ -34,6 +38,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Add [`--max-txn-ops`](https://github.com/etcd-io/etcd/pull/14340) flag to make-mirror command.
 - Add [`--consistency`](https://github.com/etcd-io/etcd/pull/15261) flag to member list command.
 - Display [field `hash_revision`](https://github.com/etcd-io/etcd/pull/14812) for `etcdctl endpoint hash` command.
+- Add [`--max-request-bytes` and `--max-recv-bytes`](https://github.com/etcd-io/etcd/pull/18718) global flags.
 
 ### etcdutl v3
 
@@ -42,6 +47,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Add [optional --bump-revision and --mark-compacted flag to etcdutl snapshot restore operation](https://github.com/etcd-io/etcd/pull/16029).
 - Add [hashkv](https://github.com/etcd-io/etcd/pull/15965) command to print hash of keys and values up to given revision
 - Removed [legacy etcdutl backup](https://github.com/etcd-io/etcd/pull/16662)
+- [Count the number of keys from users perspective](https://github.com/etcd-io/etcd/pull/19344)
 
 ### Package `clientv3`
 
@@ -76,7 +82,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 - Decreased [`--snapshot-count` default value from 100,000 to 10,000](https://github.com/etcd-io/etcd/pull/15408)
 - Add [`etcd --tls-min-version --tls-max-version`](https://github.com/etcd-io/etcd/pull/15156) to enable support for TLS 1.3.
 - Add [quota to endpoint status response](https://github.com/etcd-io/etcd/pull/17877)
-- Add ['etcd --experimental-set-member-localaddr'](https://github.com/etcd-io/etcd/pull/17661) to enable using the first specified and non-loopback local address from initial-advertise-peer-urls as the local address when communicating with a peer.
+- Add [feature gate `SetMemberLocalAddr`](https://github.com/etcd-io/etcd/pull/19413) to [enable using the first specified and non-loopback local address from initial-advertise-peer-urls as the local address when communicating with a peer]((https://github.com/etcd-io/etcd/pull/17661))
 - Add [Support multiple values for allowed client and peer TLS identities](https://github.com/etcd-io/etcd/pull/18015)
 - Add [`embed.Config.GRPCAdditionalServerOptions`](https://github.com/etcd-io/etcd/pull/14066) to support updating the default internal gRPC configuration for embedded use cases.
 
@@ -84,6 +90,7 @@ See [code changes](https://github.com/etcd-io/etcd/compare/v3.5.0...v3.6.0).
 
 - Add [`etcd grpc-proxy start --endpoints-auto-sync-interval`](https://github.com/etcd-io/etcd/pull/14354) flag to enable and configure interval of auto sync of endpoints with server.
 - Add [`etcd grpc-proxy start --listen-cipher-suites`](https://github.com/etcd-io/etcd/pull/14308) flag to support adding configurable cipher list.
+- Add [`tls min/max version to grpc proxy`](https://github.com/etcd-io/etcd/pull/18816) to support setting TLS min and max version.
 
 ### tools/benchmark
 
@@ -98,12 +105,13 @@ See [List of metrics](https://etcd.io/docs/latest/metrics/) for all metrics per 
 - Add [`etcd_server_range_duration_seconds`](https://github.com/etcd-io/etcd/pull/17983).
 
 ### Go
-- Require [Go 1.22+](https://github.com/etcd-io/etcd/pull/16594).
-- Compile with [Go 1.22+](https://go.dev/doc/devel/release#go1.21.minor). Please refer to [gc-guide](https://go.dev/doc/gc-guide) to configure `GOGC` and `GOMEMLIMIT` properly. 
+- Require [Go 1.23+](https://github.com/etcd-io/etcd/pull/16594).
+- Compile with [Go 1.23+](https://go.dev/doc/devel/release#go1.21.minor). Please refer to [gc-guide](https://go.dev/doc/gc-guide) to configure `GOGC` and `GOMEMLIMIT` properly. 
 
 ### Other
 
 - Use Distroless as base image to make the image less vulnerable and reduce image size.
 - [Upgrade grpc-gateway from v1 to v2](https://github.com/etcd-io/etcd/pull/16595).
+- [Switch from grpc-ecosystem/go-grpc-prometheus to grpc-ecosystem/go-grpc-middleware/providers/prometheus](https://github.com/etcd-io/etcd/pull/19195).
 
 <hr>

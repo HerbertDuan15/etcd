@@ -93,10 +93,10 @@ func mixVersionsSnapshotTestByAddingMember(t *testing.T, cfg *e2e.EtcdProcessClu
 		e2e.WithConfig(cfg),
 		e2e.WithSnapshotCount(10),
 	)
-	require.NoError(t, err, "failed to start etcd cluster: %v", err)
+	require.NoErrorf(t, err, "failed to start etcd cluster")
 	defer func() {
 		derr := epc.Close()
-		require.NoError(t, derr, "failed to close etcd cluster: %v", derr)
+		require.NoErrorf(t, derr, "failed to close etcd cluster")
 	}()
 
 	t.Log("Writing 20 keys to the cluster (more than SnapshotCount entries to trigger at least a snapshot)")
@@ -108,7 +108,7 @@ func mixVersionsSnapshotTestByAddingMember(t *testing.T, cfg *e2e.EtcdProcessClu
 	newCfg.ServerConfig.SnapshotCatchUpEntries = 10
 	t.Log("Starting a new etcd instance")
 	_, err = epc.StartNewProc(context.TODO(), &newCfg, t, false /* addAsLearner */)
-	require.NoError(t, err, "failed to start the new etcd instance: %v", err)
+	require.NoErrorf(t, err, "failed to start the new etcd instance")
 	defer epc.CloseProc(context.TODO(), nil)
 
 	assertKVHash(t, epc)
@@ -137,10 +137,10 @@ func mixVersionsSnapshotTestByMockPartition(t *testing.T, cfg *e2e.EtcdProcessCl
 	}
 	t.Logf("Create an etcd cluster with %d member", cfg.ClusterSize)
 	epc, err := e2e.NewEtcdProcessCluster(context.TODO(), t, clusterOptions...)
-	require.NoError(t, err, "failed to start etcd cluster: %v", err)
+	require.NoErrorf(t, err, "failed to start etcd cluster")
 	defer func() {
 		derr := epc.Close()
-		require.NoError(t, derr, "failed to close etcd cluster: %v", derr)
+		require.NoErrorf(t, derr, "failed to close etcd cluster")
 	}()
 	toPartitionedMember := epc.Procs[mockPartitionNodeIndex]
 
@@ -148,8 +148,8 @@ func mixVersionsSnapshotTestByMockPartition(t *testing.T, cfg *e2e.EtcdProcessCl
 	err = toPartitionedMember.Stop()
 	require.NoError(t, err)
 
-	t.Log("Writing 20 keys to the cluster (more than SnapshotCount entries to trigger at least a snapshot)")
-	writeKVs(t, epc.Etcdctl(), 0, 20)
+	t.Log("Writing 30 keys to the cluster (more than SnapshotCount entries to trigger at least a snapshot)")
+	writeKVs(t, epc.Etcdctl(), 0, 30)
 
 	t.Log("Verify logs to check leader has saved snapshot")
 	leaderEPC := epc.Procs[epc.WaitLeader(t)]
@@ -171,7 +171,7 @@ func writeKVs(t *testing.T, etcdctl *e2e.EtcdctlV3, startIdx, endIdx int) {
 		key := fmt.Sprintf("key-%d", i)
 		value := fmt.Sprintf("value-%d", i)
 		err := etcdctl.Put(context.TODO(), key, value, config.PutOptions{})
-		require.NoError(t, err, "failed to put %q, error: %v", key, err)
+		require.NoErrorf(t, err, "failed to put %q", key)
 	}
 }
 

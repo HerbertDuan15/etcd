@@ -42,14 +42,9 @@ func TestMemberList(t *testing.T) {
 
 			testutils.ExecuteUntil(ctx, t, func() {
 				resp, err := cc.MemberList(ctx, false)
-				if err != nil {
-					t.Fatalf("could not get member list, err: %s", err)
-				}
+				require.NoErrorf(t, err, "could not get member list")
 				expectNum := len(clus.Members())
-				gotNum := len(resp.Members)
-				if expectNum != gotNum {
-					t.Fatalf("number of members not equal, expect: %d, got: %d", expectNum, gotNum)
-				}
+				require.Lenf(t, resp.Members, expectNum, "unexpected number of members")
 				assert.Eventually(t, func() bool {
 					resp, err := cc.MemberList(ctx, false)
 					if err != nil {
@@ -115,7 +110,11 @@ func TestMemberAdd(t *testing.T) {
 		for _, quorumTc := range quorumTcs {
 			for _, clusterTc := range clusterTestCases() {
 				t.Run(learnerTc.name+"/"+quorumTc.name+"/"+clusterTc.name, func(t *testing.T) {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					ctxTimeout := 10 * time.Second
+					if quorumTc.waitForQuorum {
+						ctxTimeout += etcdserver.HealthInterval
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), ctxTimeout)
 					defer cancel()
 					c := clusterTc.config
 					c.StrictReconfigCheck = quorumTc.strictReconfigCheck
@@ -139,16 +138,10 @@ func TestMemberAdd(t *testing.T) {
 							// whether strictReconfigCheck or whether waitForQuorum
 							require.ErrorContains(t, err, "etcdserver: unhealthy cluster")
 						} else {
-							require.NoError(t, err, "MemberAdd failed")
-							if addResp.Member == nil {
-								t.Fatalf("MemberAdd failed, expected: member != nil, got: member == nil")
-							}
-							if addResp.Member.ID == 0 {
-								t.Fatalf("MemberAdd failed, expected: ID != 0, got: ID == 0")
-							}
-							if len(addResp.Member.PeerURLs) == 0 {
-								t.Fatalf("MemberAdd failed, expected: non-empty PeerURLs, got: empty PeerURLs")
-							}
+							require.NoErrorf(t, err, "MemberAdd failed")
+							require.NotNilf(t, addResp.Member, "MemberAdd failed, expected: member != nil, got: member == nil")
+							require.NotZerof(t, addResp.Member.ID, "MemberAdd failed, expected: ID != 0, got: ID == 0")
+							require.NotEmptyf(t, addResp.Member.PeerURLs, "MemberAdd failed, expected: non-empty PeerURLs, got: empty PeerURLs")
 						}
 					})
 				})
@@ -224,18 +217,12 @@ func TestMemberRemove(t *testing.T) {
 						return
 					}
 
-					require.NoError(t, err, "MemberRemove failed")
+					require.NoErrorf(t, err, "MemberRemove failed")
 					t.Logf("removeResp.Members:%v", removeResp.Members)
-					if removeResp.Header.ClusterId != clusterID {
-						t.Fatalf("MemberRemove failed, expected ClusterID: %d, got: %d", clusterID, removeResp.Header.ClusterId)
-					}
-					if len(removeResp.Members) != c.ClusterSize-1 {
-						t.Fatalf("MemberRemove failed, expected length of members: %d, got: %d", c.ClusterSize-1, len(removeResp.Members))
-					}
+					require.Equalf(t, removeResp.Header.ClusterId, clusterID, "MemberRemove failed, expected ClusterID: %d, got: %d", clusterID, removeResp.Header.ClusterId)
+					require.Lenf(t, removeResp.Members, c.ClusterSize-1, "MemberRemove failed, expected length of members: %d, got: %d", c.ClusterSize-1, len(removeResp.Members))
 					for _, m := range removeResp.Members {
-						if m.ID == memberID {
-							t.Fatalf("MemberRemove failed, member(id=%d) is still in cluster", memberID)
-						}
+						require.NotEqualf(t, m.ID, memberID, "MemberRemove failed, member(id=%d) is still in cluster", memberID)
 					}
 				})
 			})
@@ -249,9 +236,7 @@ func TestMemberRemove(t *testing.T) {
 // It ensures that `MemberRemove` function does not return an "etcdserver: server stopped" error.
 func memberToRemove(ctx context.Context, t *testing.T, client intf.Client, clusterSize int) (memberID uint64, clusterID uint64) {
 	listResp, err := client.MemberList(ctx, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	clusterID = listResp.Header.ClusterId
 	if clusterSize == 1 {
@@ -259,9 +244,7 @@ func memberToRemove(ctx context.Context, t *testing.T, client intf.Client, clust
 	} else {
 		// get status of the specific member that client has connected to
 		statusResp, err := client.Status(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// choose a member that client has not connected to
 		for _, m := range listResp.Members {
@@ -270,9 +253,7 @@ func memberToRemove(ctx context.Context, t *testing.T, client intf.Client, clust
 				break
 			}
 		}
-		if memberID == 0 {
-			t.Fatalf("memberToRemove failed. listResp:%v, statusResp:%v", listResp, statusResp)
-		}
+		require.NotZerof(t, memberID, "memberToRemove failed. listResp:%v, statusResp:%v", listResp, statusResp)
 	}
 	return memberID, clusterID
 }

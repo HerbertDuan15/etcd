@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/tests/v3/framework/config"
@@ -186,9 +188,8 @@ func TestAddMemberAfterClusterFullRotation(t *testing.T) {
 
 	// remove all the previous three members and add in three new members.
 	for i := 0; i < 3; i++ {
-		if err := c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[1].Server.MemberID())); err != nil {
-			t.Fatal(err)
-		}
+		err := c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[1].Server.MemberID()))
+		require.NoError(t, err)
 		c.WaitMembersForLeader(t, c.Members)
 
 		c.AddMember(t)
@@ -207,9 +208,7 @@ func TestIssue2681(t *testing.T) {
 	c := integration.NewCluster(t, &integration.ClusterConfig{Size: 5, DisableStrictReconfigCheck: true})
 	defer c.Terminate(t)
 
-	if err := c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[4].Server.MemberID())); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[4].Server.MemberID())))
 	c.WaitMembersForLeader(t, c.Members)
 
 	c.AddMember(t)
@@ -233,9 +232,7 @@ func testIssue2746(t *testing.T, members int) {
 		clusterMustProgress(t, c.Members)
 	}
 
-	if err := c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[members-1].Server.MemberID())); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.RemoveMember(t, c.Members[0].Client, uint64(c.Members[members-1].Server.MemberID())))
 	c.WaitMembersForLeader(t, c.Members)
 
 	c.AddMember(t)
@@ -311,9 +308,7 @@ func TestIssue3699(t *testing.T) {
 	t.Logf("Restarting member '0'...")
 	// bring back node a
 	// node a will remain useless as long as d is the leader.
-	if err := c.Members[0].Restart(t); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, c.Members[0].Restart(t))
 	t.Logf("Restarted member '0'.")
 
 	select {
@@ -517,4 +512,46 @@ func TestSpeedyTerminate(t *testing.T) {
 		t.Fatalf("Cluster took too long to terminate")
 	case <-donec:
 	}
+}
+
+// TestConcurrentRemoveMember demonstrated a panic in mayRemoveMember with
+// concurrent calls to MemberRemove. To reliably reproduce the panic, a delay
+// needed to be injected in IsMemberExist, which is done using a failpoint.
+// After fixing the bug, IsMemberExist is no longer called by mayRemoveMember.
+func TestConcurrentRemoveMember(t *testing.T) {
+	integration.BeforeTest(t, integration.WithFailpoint("afterIsMemberExist", `sleep("1s")`))
+	c := integration.NewCluster(t, &integration.ClusterConfig{Size: 1})
+	defer c.Terminate(t)
+
+	addResp, err := c.Members[0].Client.MemberAddAsLearner(context.Background(), []string{"http://localhost:123"})
+	require.NoError(t, err)
+	removeID := addResp.Member.ID
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(time.Second / 2)
+		c.Members[0].Client.MemberRemove(context.Background(), removeID)
+		close(done)
+	}()
+	_, err = c.Members[0].Client.MemberRemove(context.Background(), removeID)
+	require.NoError(t, err)
+	<-done
+}
+
+func TestConcurrentMoveLeader(t *testing.T) {
+	integration.BeforeTest(t, integration.WithFailpoint("afterIsMemberExist", `sleep("1s")`))
+	c := integration.NewCluster(t, &integration.ClusterConfig{Size: 1})
+	defer c.Terminate(t)
+
+	addResp, err := c.Members[0].Client.MemberAddAsLearner(context.Background(), []string{"http://localhost:123"})
+	require.NoError(t, err)
+	removeID := addResp.Member.ID
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(time.Second / 2)
+		c.Members[0].Client.MoveLeader(context.Background(), removeID)
+		close(done)
+	}()
+	_, err = c.Members[0].Client.MemberRemove(context.Background(), removeID)
+	require.NoError(t, err)
+	<-done
 }

@@ -31,15 +31,14 @@ import (
 	"github.com/coreos/go-semver/semver"
 	"go.uber.org/zap"
 
+	"go.etcd.io/etcd/api/v3/version"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/expect"
 	"go.etcd.io/etcd/pkg/v3/proxy"
 	"go.etcd.io/etcd/tests/v3/framework/config"
 )
 
-var (
-	EtcdServerReadyLines = []string{"ready to serve client requests"}
-)
+var EtcdServerReadyLines = []string{"ready to serve client requests"}
 
 // EtcdProcess is a process that serves etcd requests.
 type EtcdProcess interface {
@@ -112,7 +111,7 @@ func NewEtcdServerProcess(t testing.TB, cfg *EtcdServerProcessConfig) (*EtcdServ
 		if err := os.RemoveAll(cfg.DataDirPath); err != nil {
 			return nil, err
 		}
-		if err := os.Mkdir(cfg.DataDirPath, 0700); err != nil {
+		if err := os.Mkdir(cfg.DataDirPath, 0o700); err != nil {
 			return nil, err
 		}
 	}
@@ -307,7 +306,7 @@ func (ep *EtcdServerProcess) IsRunning() bool {
 	}
 
 	exitCode, err := ep.proc.ExitCode()
-	if err == expect.ErrProcessRunning {
+	if errors.Is(err, expect.ErrProcessRunning) {
 		return true
 	}
 
@@ -363,7 +362,7 @@ func (f *BinaryFailpoints) SetupHTTP(ctx context.Context, failpoint, payload str
 		Host:   host,
 		Path:   failpoint,
 	}
-	r, err := http.NewRequestWithContext(ctx, "PUT", failpointURL.String(), bytes.NewBuffer([]byte(payload)))
+	r, err := http.NewRequestWithContext(ctx, http.MethodPut, failpointURL.String(), bytes.NewBuffer([]byte(payload)))
 	if err != nil {
 		return err
 	}
@@ -395,7 +394,7 @@ func (f *BinaryFailpoints) DeactivateHTTP(ctx context.Context, failpoint string)
 		Host:   host,
 		Path:   failpoint,
 	}
-	r, err := http.NewRequestWithContext(ctx, "DELETE", failpointURL.String(), nil)
+	r, err := http.NewRequestWithContext(ctx, http.MethodDelete, failpointURL.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -532,4 +531,12 @@ func CouldSetSnapshotCatchupEntries(execPath string) bool {
 	// snapshot-catchup-entries flag was backported in https://github.com/etcd-io/etcd/pull/17808
 	v3_5_14 := semver.Version{Major: 3, Minor: 5, Patch: 14}
 	return v.Compare(v3_5_14) >= 0
+}
+
+func IsSnapshotCatchupEntriesFlagAvailable(execPath string) bool {
+	v, err := GetVersionFromBinary(execPath)
+	if err != nil {
+		return false
+	}
+	return !v.LessThan(version.V3_6)
 }

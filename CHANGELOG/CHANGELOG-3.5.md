@@ -1,16 +1,69 @@
 
 
 Previous change logs can be found at [CHANGELOG-3.4](https://github.com/etcd-io/etcd/blob/main/CHANGELOG/CHANGELOG-3.4.md).
+<hr>
+
+## v3.5.19 (TBC)
+
+### etcd server
+- Backport [add learner status check to readyz endpoint](https://github.com/etcd-io/etcd/pull/19280).
+- Fix [performance regression due to uncertain compaction sleep interval](https://github.com/etcd-io/etcd/pull/19405).
+
+### `tools/benchmark`
+- Backport [add mixed read-write performance evaluation scripts](https://github.com/etcd-io/etcd/pull/19275).
+
+### Dependencies
+- Compile binaries using [go 1.23.6](https://github.com/etcd-io/etcd/pull/19430).
 
 <hr>
 
-## v3.5.16 (TBC)
+## v3.5.18 (2025-01-24)
+
+### etcd server
+- Avoid deadlock in etcd.Close when stopping during bootstrapping, see https://github.com/etcd-io/etcd/pull/19167 and https://github.com/etcd-io/etcd/pull/19258.
+- [Print warning messages if any of the deprecated v2store related flags is set](https://github.com/etcd-io/etcd/pull/18999)
+- Fix [missing delete event on watch opened on same revision as compaction request](https://github.com/etcd-io/etcd/pull/19249)
+
+### Package `clientv3`
+- Fix [runtime panic that occurs when KeepAlive is called with a Context implemented by an uncomparable type](https://github.com/etcd-io/etcd/pull/18937)
+
+### etcdutl v3
+- Add [command `etcdutl check v2store` to offline check whether v2store contains custom content](https://github.com/etcd-io/etcd/pull/19113)
+
+### etcd grpc-proxy
+- Add [`tls min/max version to grpc proxy`](https://github.com/etcd-io/etcd/pull/18829) to support setting TLS min and max version.
+
+### Dependencies
+- Bump [golang-jwt/jwt to 4.5.1 to address GO-2024-3250](https://github.com/etcd-io/etcd/pull/18899).
+- Compile binaries using [go 1.22.11](https://github.com/etcd-io/etcd/pull/19211).
+- Bump [golang.org/x/crypto to 0.32.0 to address CVE-2024-45337](https://github.com/etcd-io/etcd/pull/19154).
+- Bump [golang.org/x/net to 0.34.0 to address CVE-2024-45338](https://github.com/etcd-io/etcd/pull/19158).
+
+<hr>
+
+## v3.5.17 (2024-11-12)
+
+### etcd server
+- Fix [watchserver related goroutine leakage](https://github.com/etcd-io/etcd/pull/18784)
+- Fix [risk of a partial write txn being applied](https://github.com/etcd-io/etcd/pull/18799)
+- Fix [panicking occurred due to improper error handling during defragmentation](https://github.com/etcd-io/etcd/pull/18842)
+- Fix [close temp file(s) in case an error happens during defragmentation](https://github.com/etcd-io/etcd/pull/18854)
+
+### Dependencies
+- Compile binaries using [go 1.22.9](https://github.com/etcd-io/etcd/pull/18849).
+
+<hr>
+
+## v3.5.16 (2024-09-10)
 
 ### etcd server
 - Fix [performance regression issue caused by the `ensureLeadership` in lease renew](https://github.com/etcd-io/etcd/pull/18439).
+- [Keep the tombstone during compaction if it happens to be the compaction revision](https://github.com/etcd-io/etcd/pull/18474)
+- Add [`etcd --experimental-compaction-sleep-interval`](https://github.com/etcd-io/etcd/pull/18514) flag to control the sleep interval between each compaction batch.
 
 ### Dependencies
-- Compile binaries using [go 1.21.13](https://github.com/etcd-io/etcd/pull/18421).
+- Compile binaries using [go 1.22.7](https://github.com/etcd-io/etcd/pull/18550).
+- Upgrade [bbolt to v1.3.11](https://github.com/etcd-io/etcd/pull/18489).
 
 <hr>
 

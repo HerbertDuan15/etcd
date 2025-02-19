@@ -4,16 +4,45 @@ Previous change logs can be found at [CHANGELOG-3.3](https://github.com/etcd-io/
 
 <hr>
 
-## v3.4.34 (TBD)
+## v3.4.36 (TBC)
+
+### etcd server
+- [Avoid deadlock in etcd.Close when stopping during bootstrapping](https://github.com/etcd-io/etcd/pull/19166)
+- Fix [missing delete event on watch opened on same revision as compaction request](https://github.com/etcd-io/etcd/pull/19251)
+
+### Package `clientv3`
+- Fix [runtime panic that occurs when KeepAlive is called with a Context implemented by an uncomparable type](https://github.com/etcd-io/etcd/pull/18936)
+
+### Dependencies
+- Compile binaries using [go 1.23.6](https://github.com/etcd-io/etcd/pull/19429)
+- Bump [golang.org/x/crypto to 0.32.0 to address CVE-2024-45337 and golang.org/x/net to 0.34.0 to address CVE-2024-45338](https://github.com/etcd-io/etcd/pull/19197).
+
+<hr>
+
+## v3.4.35 (2024-11-12)
+
+### etcd server
+- Fix [watchserver related goroutine leakage](https://github.com/etcd-io/etcd/pull/18785)
+- Fix [panicking occurred due to improper error handling during defragmentation](https://github.com/etcd-io/etcd/pull/18843)
+- Fix [close temp file(s) in case an error happens during defragmentation](https://github.com/etcd-io/etcd/pull/18855)
+
+### Dependencies
+- Compile binaries using [go 1.22.9](https://github.com/etcd-io/etcd/pull/18850).
+
+<hr>
+
+## v3.4.34 (2024-09-11)
 
 ### etcd server
 - Fix [performance regression issue caused by the `ensureLeadership` in lease renew](https://github.com/etcd-io/etcd/pull/18440).
+- [Keep the tombstone during compaction if it happens to be the compaction revision](https://github.com/etcd-io/etcd/pull/18475)
 
 ### Package clientv3
 - [Print gRPC metadata in guaranteed order using the official go fmt pkg](https://github.com/etcd-io/etcd/pull/18311).
 
 ### Dependencies
-- Compile binaries using go [1.21.13](https://github.com/etcd-io/etcd/pull/18422).
+- Compile binaries using [go 1.22.7](https://github.com/etcd-io/etcd/pull/18549).
+- Upgrade [bbolt to 1.3.11](https://github.com/etcd-io/etcd/pull/18488).
 
 <hr>
 

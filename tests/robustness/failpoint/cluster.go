@@ -23,19 +23,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-semver/semver"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/tests/v3/framework/e2e"
-	"go.etcd.io/etcd/tests/v3/robustness/client"
 	"go.etcd.io/etcd/tests/v3/robustness/identity"
 	"go.etcd.io/etcd/tests/v3/robustness/report"
 	"go.etcd.io/etcd/tests/v3/robustness/traffic"
 )
 
 var (
-	MemberReplace Failpoint = memberReplace{}
+	MemberReplace          Failpoint = memberReplace{}
+	MemberDowngrade        Failpoint = memberDowngrade{}
+	MemberDowngradeUpgrade Failpoint = memberDowngradeUpgrade{}
 )
 
 type memberReplace struct{}
@@ -43,11 +47,13 @@ type memberReplace struct{}
 func (f memberReplace) Inject(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2e.EtcdProcessCluster, baseTime time.Time, ids identity.Provider) ([]report.ClientReport, error) {
 	memberID := uint64(rand.Int() % len(clus.Procs))
 	member := clus.Procs[memberID]
-	var endpoints []string
-	for i := 1; i < len(clus.Procs); i++ {
-		endpoints = append(endpoints, clus.Procs[(int(memberID)+i)%len(clus.Procs)].EndpointsGRPC()...)
-	}
-	cc, err := client.NewRecordingClient(endpoints, ids, baseTime)
+	endpoints := []string{clus.Procs[(int(memberID)+1)%len(clus.Procs)].EndpointsGRPC()[0]}
+	cc, err := clientv3.New(clientv3.Config{
+		Endpoints:            endpoints,
+		Logger:               zap.NewNop(),
+		DialKeepAliveTime:    10 * time.Second,
+		DialKeepAliveTimeout: 100 * time.Millisecond,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +62,8 @@ func (f memberReplace) Inject(ctx context.Context, t *testing.T, lg *zap.Logger,
 	if err != nil {
 		return nil, err
 	}
-	if !found {
-		t.Fatal("Member not found")
-	}
+	require.Truef(t, found, "Member not found")
+
 	// Need to wait health interval for cluster to accept member changes
 	time.Sleep(etcdserver.HealthInterval)
 	lg.Info("Removing member", zap.String("member", member.Config().Name))
@@ -70,9 +75,7 @@ func (f memberReplace) Inject(ctx context.Context, t *testing.T, lg *zap.Logger,
 	if err != nil {
 		return nil, err
 	}
-	if found {
-		t.Fatal("Expected member to be removed")
-	}
+	require.Falsef(t, found, "Expected member to be removed")
 
 	for member.IsRunning() {
 		err = member.Kill()
@@ -141,10 +144,141 @@ func (f memberReplace) Available(config e2e.EtcdProcessClusterConfig, member e2e
 	return config.ClusterSize > 1 && (config.Version == e2e.QuorumLastVersion || member.Config().ExecPath == e2e.BinPath.Etcd)
 }
 
-func getID(ctx context.Context, cc clientv3.Cluster, name string) (id uint64, found bool, err error) {
+type memberDowngrade struct{}
+
+func (f memberDowngrade) Inject(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2e.EtcdProcessCluster, baseTime time.Time, ids identity.Provider) ([]report.ClientReport, error) {
+	currentVersion, err := e2e.GetVersionFromBinary(e2e.BinPath.Etcd)
+	if err != nil {
+		return nil, err
+	}
+	lastVersion, err := e2e.GetVersionFromBinary(e2e.BinPath.EtcdLastRelease)
+	if err != nil {
+		return nil, err
+	}
+	numberOfMembersToDowngrade := rand.Int()%len(clus.Procs) + 1
+
+	member := clus.Procs[0]
+	endpoints := []string{member.EndpointsGRPC()[0]}
+	cc, err := clientv3.New(clientv3.Config{
+		Endpoints:            endpoints,
+		Logger:               zap.NewNop(),
+		DialKeepAliveTime:    10 * time.Second,
+		DialKeepAliveTimeout: 100 * time.Millisecond,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cc.Close()
+
+	// Need to wait health interval for cluster to accept changes
+	time.Sleep(etcdserver.HealthInterval)
+	e2e.DowngradeEnable(t, clus, lastVersion)
+
+	err = e2e.DowngradeUpgradeMembers(t, lg, clus, numberOfMembersToDowngrade, currentVersion, lastVersion)
+	time.Sleep(etcdserver.HealthInterval)
+	return nil, err
+}
+
+func (f memberDowngrade) Name() string {
+	return "MemberDowngrade"
+}
+
+func (f memberDowngrade) Available(config e2e.EtcdProcessClusterConfig, member e2e.EtcdProcess, profile traffic.Profile) bool {
+	if !fileutil.Exist(e2e.BinPath.EtcdLastRelease) {
+		return false
+	}
+	// only run memberDowngrade test if no snapshot would be sent between members.
+	// see https://github.com/etcd-io/etcd/issues/19147 for context.
+	if config.ServerConfig.SnapshotCatchUpEntries < etcdserver.DefaultSnapshotCatchUpEntries {
+		return false
+	}
+	v, err := e2e.GetVersionFromBinary(e2e.BinPath.Etcd)
+	if err != nil {
+		panic("Failed checking etcd version binary")
+	}
+	v3_6 := semver.Version{Major: 3, Minor: 6}
+	// only current version cluster can be downgraded.
+	return v.Compare(v3_6) >= 0 && (config.Version == e2e.CurrentVersion && member.Config().ExecPath == e2e.BinPath.Etcd)
+}
+
+type memberDowngradeUpgrade struct{}
+
+func (f memberDowngradeUpgrade) Inject(ctx context.Context, t *testing.T, lg *zap.Logger, clus *e2e.EtcdProcessCluster, baseTime time.Time, ids identity.Provider) ([]report.ClientReport, error) {
+	currentVersion, err := e2e.GetVersionFromBinary(e2e.BinPath.Etcd)
+	if err != nil {
+		return nil, err
+	}
+	lastVersion, err := e2e.GetVersionFromBinary(e2e.BinPath.EtcdLastRelease)
+	if err != nil {
+		return nil, err
+	}
+
+	member := clus.Procs[0]
+	endpoints := []string{member.EndpointsGRPC()[0]}
+	cc, err := clientv3.New(clientv3.Config{
+		Endpoints:            endpoints,
+		Logger:               zap.NewNop(),
+		DialKeepAliveTime:    10 * time.Second,
+		DialKeepAliveTimeout: 100 * time.Millisecond,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cc.Close()
+
+	e2e.DowngradeEnable(t, clus, lastVersion)
+	// downgrade all members first
+	err = e2e.DowngradeUpgradeMembers(t, lg, clus, len(clus.Procs), currentVersion, lastVersion)
+	if err != nil {
+		return nil, err
+	}
+	// partial upgrade the cluster
+	numberOfMembersToUpgrade := rand.Int()%len(clus.Procs) + 1
+	err = e2e.DowngradeUpgradeMembers(t, lg, clus, numberOfMembersToUpgrade, lastVersion, currentVersion)
+	time.Sleep(etcdserver.HealthInterval)
+	return nil, err
+}
+
+func (f memberDowngradeUpgrade) Name() string {
+	return "MemberDowngradeUpgrade"
+}
+
+func (f memberDowngradeUpgrade) Available(config e2e.EtcdProcessClusterConfig, member e2e.EtcdProcess, profile traffic.Profile) bool {
+	if !fileutil.Exist(e2e.BinPath.EtcdLastRelease) {
+		return false
+	}
+	// only run memberDowngrade test if no snapshot would be sent between members.
+	// see https://github.com/etcd-io/etcd/issues/19147 for context.
+	if config.ServerConfig.SnapshotCatchUpEntries < etcdserver.DefaultSnapshotCatchUpEntries {
+		return false
+	}
+	v, err := e2e.GetVersionFromBinary(e2e.BinPath.Etcd)
+	if err != nil {
+		panic("Failed checking etcd version binary")
+	}
+	v3_6 := semver.Version{Major: 3, Minor: 6}
+	// only current version cluster can be downgraded.
+	return v.Compare(v3_6) >= 0 && (config.Version == e2e.CurrentVersion && member.Config().ExecPath == e2e.BinPath.Etcd)
+}
+
+func (f memberDowngradeUpgrade) Timeout() time.Duration {
+	return 120 * time.Second
+}
+
+func getID(ctx context.Context, cc *clientv3.Client, name string) (id uint64, found bool, err error) {
+	// Ensure linearized MemberList by first making a linearized Get request from the same member.
+	// This is required for v3.4 support as it doesn't support linearized MemberList https://github.com/etcd-io/etcd/issues/18929
+	// TODO: Remove preceding Get when v3.4 is no longer supported.
+	getResp, err := cc.Get(ctx, "linearized-list-before-member-list")
+	if err != nil {
+		return 0, false, err
+	}
 	resp, err := cc.MemberList(ctx)
 	if err != nil {
 		return 0, false, err
+	}
+	if getResp.Header.MemberId != resp.Header.MemberId {
+		return 0, false, fmt.Errorf("expected Get and MemberList to be sent to the same member, got: %d and %d", getResp.Header.MemberId, resp.Header.MemberId)
 	}
 	for _, member := range resp.Members {
 		if name == member.Name {

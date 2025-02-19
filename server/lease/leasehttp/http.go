@@ -47,7 +47,7 @@ type leaseHandler struct {
 }
 
 func (h *leaseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -75,7 +75,7 @@ func (h *leaseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ttl, rerr := h.l.Renew(lease.LeaseID(lreq.ID))
 		if rerr != nil {
-			if rerr == lease.ErrLeaseNotFound {
+			if errors.Is(rerr, lease.ErrLeaseNotFound) {
 				http.Error(w, rerr.Error(), http.StatusNotFound)
 				return
 			}
@@ -197,7 +197,7 @@ func RenewHTTP(ctx context.Context, id lease.LeaseID, url string, rt http.RoundT
 
 	lresp := &pb.LeaseKeepAliveResponse{}
 	if err := lresp.Unmarshal(b); err != nil {
-		return -1, fmt.Errorf(`lease: %v. data = "%s"`, err, b)
+		return -1, fmt.Errorf(`lease: %w. data = "%s"`, err, b)
 	}
 	if lresp.ID != int64(id) {
 		return -1, fmt.Errorf("lease: renew id mismatch")
@@ -254,7 +254,7 @@ func TimeToLiveHTTP(ctx context.Context, id lease.LeaseID, keys bool, url string
 
 	lresp := &leasepb.LeaseInternalResponse{}
 	if err := lresp.Unmarshal(b); err != nil {
-		return nil, fmt.Errorf(`lease: %v. data = "%s"`, err, string(b))
+		return nil, fmt.Errorf(`lease: %w. data = "%s"`, err, string(b))
 	}
 	if lresp.LeaseTimeToLiveResponse.ID != int64(id) {
 		return nil, fmt.Errorf("lease: TTL id mismatch")

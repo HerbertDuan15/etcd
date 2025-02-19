@@ -117,7 +117,7 @@ func NewMaintenance(c *Client) Maintenance {
 		dial: func(endpoint string) (pb.MaintenanceClient, func(), error) {
 			conn, err := c.Dial(endpoint)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to dial endpoint %s with maintenance client: %v", endpoint, err)
+				return nil, nil, fmt.Errorf("failed to dial endpoint %s with maintenance client: %w", endpoint, err)
 			}
 
 			cancel := func() { conn.Close() }
@@ -217,7 +217,6 @@ func (m *maintenance) Status(ctx context.Context, endpoint string) (*StatusRespo
 func (m *maintenance) HashKV(ctx context.Context, endpoint string, rev int64) (*HashKVResponse, error) {
 	remote, cancel, err := m.dial(endpoint)
 	if err != nil {
-
 		return nil, ContextError(ctx, err)
 	}
 	defer cancel()
@@ -298,8 +297,8 @@ func (m *maintenance) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 }
 
 func (m *maintenance) logAndCloseWithError(err error, pw *io.PipeWriter) {
-	switch err {
-	case io.EOF:
+	switch {
+	case errors.Is(err, io.EOF):
 		m.lg.Info("completed snapshot read; closing")
 	default:
 		m.lg.Warn("failed to receive from snapshot stream; closing", zap.Error(err))

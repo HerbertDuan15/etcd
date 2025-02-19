@@ -1,16 +1,91 @@
 # etcd Robustness Testing
 
-Purpose of etcd robustness tests is to validate that etcd upholds
-[KV API guarantees] and [watch API guarantees] under any condition or failure.
-
-Robustness tests achieve that comparing etcd cluster behavior against a simplified model.
-Multiple test encompass different etcd cluster setups, client traffic types and failures experienced by cluster.
-During a single test we create a cluster and inject failures while sending and recording client traffic.
-Correctness is validated by running collected history of client operations against the etcd model and a set of validators.
-Upon failure tests generate a report that can be used to attribute whether failure was caused by bug in etcd or test framework. 
+This document describes the robustness testing framework for etcd, a distributed key-value store.
+The purpose of these tests is to rigorously validate that etcd maintains its [KV API guarantees] and [watch API guarantees] under a wide range of conditions and failures.
 
 [KV API guarantees]: https://etcd.io/docs/v3.6/learning/api_guarantees/#kv-apis
 [watch API guarantees]: https://etcd.io/docs/v3.6/learning/api_guarantees/#watch-apis
+
+## Robustness track record
+
+| Correctness / Consistency issue                                              | Report     | Introduced in     | Discovered by   | Reproducible by robustness test                   | Command                             |
+| -----------------------------------------------------------------            | ---------- | ----------------- | --------------- | ------------------------------------------------- | ----------------------------------- |
+| Inconsistent revision caused by crash during high load [#13766]              | Mar 2022   | v3.5              | User            | Yes, report preceded robustness tests             | `make test-robustness-issue13766`   |
+| Single node cluster can loose a write on crash [#14370]                      | Aug 2022   | v3.4 or earlier   | User            | Yes, report preceded robustness tests             | `make test-robustness-issue14370`   |
+| Enabling auth can lead to inconsistency [#14571]                             | Oct 2022   | v3.4 or earlier   | User            | No, authorization is not covered.                 |                                     |
+| Inconsistent revision caused by crash during defrag [#14685]                 | Nov 2022   | v3.5              | Robustness      | Yes, after covering defragmentation.              | `make test-robustness-issue14685`   |
+| Watch progress notification not synced with steam [#15220]                   | Jan 2023   | v3.4 or earlier   | User            | Yes, after covering watch progress notification   |                                     |
+| Watch traveling back in time after network partition [#15271]                | Feb 2023   | v3.4 or earlier   | Robustness      | Yes, after covering network partitions            | `make test-robustness-issue15271`   |
+| Duplicated watch event due to bug in TXN caching [#17247]                    | Jan 2024   | main branch       | Robustness      | Yes, prevented regression in v3.6                 |                                     |
+| Watch events lost during stream starvation [#17529]                          | Mar 2024   | v3.4 or earlier   | User            | Yes, after covering of slow watch                 | `make test-robustness-issue17529`   |
+| Revision decreasing caused by crash during compaction [#17780]               | Apr 2024   | v3.4 or earlier   | Robustness      | Yes, after covering compaction                    |                                     |
+| Watch dropping an event when compacting on delete [#18089]                   | May 2024   | v3.4 or earlier   | Robustness      | Yes, after covering of compaction                 | `make test-robustness-issue18089`   |
+| Inconsistency when reading compacted revision in TXN [#18667]                | Oct 2024   | v3.4 or earlier   | User            |                                                   |                                     |
+| Missing delete event on watch opened on same revision as compaction [#19179] | Jan 2025   | v3.4 or earlier   | Robustness      | Yes, after covering of compaction                 | `make test-robustness-issue19179`   |
+
+[#13766]: https://github.com/etcd-io/etcd/issues/13766
+[#14370]: https://github.com/etcd-io/etcd/issues/14370
+[#14571]: https://github.com/etcd-io/etcd/issues/14571
+[#14685]: https://github.com/etcd-io/etcd/pull/14685
+[#15220]: https://github.com/etcd-io/etcd/issues/15220
+[#15271]: https://github.com/etcd-io/etcd/issues/15271
+[#17247]: https://github.com/etcd-io/etcd/issues/17247
+[#17529]: https://github.com/etcd-io/etcd/issues/17529
+[#17780]: https://github.com/etcd-io/etcd/issues/17780
+[#18089]: https://github.com/etcd-io/etcd/issues/18089
+[#18667]: https://github.com/etcd-io/etcd/issues/18667
+[#19179]: https://github.com/etcd-io/etcd/issues/19179
+
+
+## How Robustness Tests Work
+
+Robustness tests compare etcd cluster behavior against a simplified model of its expected behavior.
+These tests cover various scenarios, including:
+
+* **Different etcd cluster setups:** Cluster sizes, configurations, and deployment topologies.
+* **Client traffic types:**  Variety of key-value operations (puts, ranges, transactions) and watch patterns.
+* **Failures:** Network partitions, node crashes, disk failures, and other disruptions.
+
+**Test Procedure:**
+
+1. **Cluster Creation:**  A new etcd cluster is created with the specified configuration.
+2. **Traffic and Failures:** Client traffic is generated and sent to the cluster while failures are injected.
+3. **History Collection:** All client operations and their results are recorded.
+4. **Validation:** The collected history is validated against the etcd model and a set of validators to ensure consistency and correctness.
+5. **Report Generation:**  If a failure is detected and a detailed report is generated to help diagnose the issue.
+   This report includes information about the client operations, etcd data directories.
+
+## Key Concepts
+
+### Distributed System Terminology
+
+*   **Consensus:** A process where nodes in a distributed system agree on a single data value. Etcd uses the Raft algorithm to achieve consensus.
+*   **Strict vs Eventual consistency:**
+    *   **Strict Consistency:** All components see the same data at the same time after an update.
+    *   **Eventual Consistency:** Components may temporarily see different data after an update but converge to the same view eventually.
+*   **Consistency Models (https://jepsen.io/consistency)**
+    *   **Single-Object Consistency Models:**
+        *   **Sequential Consistency:** A strong single-object model. Operations appear to take place in some total order, consistent with the order of operations on each individual process.
+        *   **Linearizable Consistency:** The strongest single-object model. Operations appear to happen instantly and in order, consistent with real-time ordering.
+    *   **Transactional Consistency Models**
+        *   **Serializable Consistency:** A transactional model guaranteeing that transactions appear to occur in some total order. Operations within a transaction are atomic and do not interleave with other transactions. It's a multi-object property, applying to the entire system, not just individual objects.
+        *   **Strict Serializable Consistency:** The strongest transactional model. Combines the total order of serializability with the real-time ordering constraints of linearizability.
+
+Etcd provides strict serializability for KV operations and eventual consistency for Watch.
+
+**Etcd Guarantees**
+
+*   **Key-value API operations** https://etcd.io/docs/latest/learning/api_guarantees/#kv-apis
+*   **Watch API guarantees** https://etcd.io/docs/latest/learning/api_guarantees/#watch-apis
+
+### Kubernetes Integration
+
+*   **[Implicit Kubernetes-ETCD Contract]:**  Defines how Kubernetes uses etcd to store cluster state.
+*   **ResourceVersion:**  A string used by Kubernetes to track resource versions, corresponding to etcd revisions.
+*   **Sharding resource types:** Kubernetes treats each resource type as a totally independent entity.
+    It allows sharding each resource type into a separate etcd cluster.
+
+[Implicit Kubernetes-ETCD Contract]: https://docs.google.com/document/d/1NUZDiJeiIH5vo_FMaTWf0JtrQKCx0kpEaIIuPoj9P6A/edit?usp=sharing
 
 ## Running locally 
 
@@ -51,15 +126,15 @@ Errors in etcd model could be causing false positives, which makes the ability t
 
    * **For remote runs on CI:** you need to go to the [Prow Dashboard](https://prow.k8s.io/job-history/gs/kubernetes-jenkins/logs/ci-etcd-robustness-amd64), go to a build, download one of the Artifacts (`artifacts/results.zip`), and extract it locally.
 
-     ![Prow job run page](./prow_job.png)
+     ![Prow job run page](readme-images/prow_job.png)
 
-     ![Prow job artifacts run page](./prow_job_artifacts_page.png)
+     ![Prow job artifacts run page](readme-images/prow_job_artifacts_page.png)
 
-     ![Prow job artifacts run page artifacts dir](./prow_job_artifacts_dir_page.png)
+     ![Prow job artifacts run page artifacts dir](readme-images/prow_job_artifacts_dir_page.png)
 
      Each directory will be prefixed by `TestRobustness` each containing a robustness test report.
 
-     ![artifact archive](./artifact_archive.png)
+     ![artifact archive](readme-images/artifact_archive.png)
 
      Pick one of the directories within the archive corresponding to the failed test scenario.
      The largest directory by size usually corresponds to the failed scenario.
@@ -134,7 +209,7 @@ Open `/tmp/TestRobustnessRegression_Issue14370/1715157774429416550/history.html`
 Jump to the error in linearization by clicking `[ jump to first error ]` on the top of the page.
 
 You should see a graph similar to the one on the image below.
-![issue14370](./issue14370.png)
+![issue14370](readme-images/issue14370.png)
 
 Last correct request (connected with grey line) is a `Put` request that succeeded and got revision `168`.
 All following requests are invalid (connected with red line) as they have revision `167`. 
